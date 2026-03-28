@@ -1,0 +1,295 @@
+syntax = "proto3";
+
+package zenoh.grpc.v1;
+
+message Empty {}
+
+enum SampleKind {
+  SAMPLE_KIND_UNSPECIFIED = 0;
+  SAMPLE_KIND_PUT = 1;
+  SAMPLE_KIND_DELETE = 2;
+}
+
+enum CongestionControl {
+  CONGESTION_CONTROL_UNSPECIFIED = 0;
+  CONGESTION_CONTROL_BLOCK = 1;
+  CONGESTION_CONTROL_DROP = 2;
+}
+
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_REAL_TIME = 1;
+  PRIORITY_INTERACTIVE_HIGH = 2;
+  PRIORITY_INTERACTIVE_LOW = 3;
+  PRIORITY_DATA_HIGH = 4;
+  PRIORITY_DATA = 5;
+  PRIORITY_DATA_LOW = 6;
+  PRIORITY_BACKGROUND = 7;
+}
+
+enum Reliability {
+  RELIABILITY_UNSPECIFIED = 0;
+  RELIABILITY_BEST_EFFORT = 1;
+  RELIABILITY_RELIABLE = 2;
+}
+
+enum Locality {
+  LOCALITY_UNSPECIFIED = 0;
+  LOCALITY_ANY = 1;
+  LOCALITY_SESSION_LOCAL = 2;
+  LOCALITY_REMOTE = 3;
+}
+
+enum QueryTarget {
+  QUERY_TARGET_UNSPECIFIED = 0;
+  QUERY_TARGET_BEST_MATCHING = 1;
+  QUERY_TARGET_ALL = 2;
+  QUERY_TARGET_ALL_COMPLETE = 3;
+}
+
+enum ConsolidationMode {
+  CONSOLIDATION_MODE_UNSPECIFIED = 0;
+  CONSOLIDATION_MODE_AUTO = 1;
+  CONSOLIDATION_MODE_NONE = 2;
+  CONSOLIDATION_MODE_MONOTONIC = 3;
+  CONSOLIDATION_MODE_LATEST = 4;
+}
+
+message Value {
+  bytes payload = 1;
+  string encoding = 2;
+}
+
+message SourceInfo {
+  string id = 1;
+  uint64 sequence = 2;
+}
+
+message Sample {
+  string key_expr = 1;
+  bytes payload = 2;
+  string encoding = 3;
+  SampleKind kind = 4;
+  bytes attachment = 5;
+  string timestamp = 6;
+  SourceInfo source_info = 7;
+}
+
+message ReplyError {
+  bytes payload = 1;
+  string encoding = 2;
+}
+
+message Reply {
+  oneof result {
+    Sample sample = 1;
+    ReplyError error = 2;
+  }
+}
+
+message SessionInfoRequest {
+  string client_id = 1;
+}
+
+message SessionInfoReply {
+  string zid = 1;
+}
+
+message SessionPutRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  bytes payload = 3;
+  string encoding = 4;
+  CongestionControl congestion_control = 5;
+  Priority priority = 6;
+  bool express = 7;
+  bytes attachment = 8;
+  string timestamp = 9;
+  Locality allowed_destination = 10;
+}
+
+message SessionDeleteRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  CongestionControl congestion_control = 3;
+  Priority priority = 4;
+  bool express = 5;
+  bytes attachment = 6;
+  string timestamp = 7;
+  Locality allowed_destination = 8;
+}
+
+message SessionGetRequest {
+  string client_id = 1;
+  string selector = 2;
+  QueryTarget target = 3;
+  ConsolidationMode consolidation = 4;
+  uint64 timeout_ms = 5;
+  bytes payload = 6;
+  string encoding = 7;
+  bytes attachment = 8;
+  Locality allowed_destination = 9;
+}
+
+message CleanupClientRequest {
+  string client_id = 1;
+}
+
+message DeclarePublisherRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  string encoding = 3;
+  CongestionControl congestion_control = 4;
+  Priority priority = 5;
+  bool express = 6;
+  Reliability reliability = 7;
+  Locality allowed_destination = 8;
+}
+
+message DeclareSubscriberRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  Locality allowed_origin = 3;
+}
+
+message DeclareQueryableRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  bool complete = 3;
+  Locality allowed_origin = 4;
+}
+
+message DeclareQuerierRequest {
+  string client_id = 1;
+  string key_expr = 2;
+  QueryTarget target = 3;
+  ConsolidationMode consolidation = 4;
+  uint64 timeout_ms = 5;
+  Locality allowed_destination = 6;
+}
+
+message HandleReply {
+  uint64 handle = 1;
+}
+
+message PublisherPutRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  bytes payload = 3;
+  string encoding = 4;
+  bytes attachment = 5;
+  string timestamp = 6;
+}
+
+message PublisherDeleteRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  bytes attachment = 3;
+  string timestamp = 4;
+}
+
+message UndeclareRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+}
+
+message SubscriberEventsRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+}
+
+message SubscriberEvent {
+  Sample sample = 1;
+}
+
+message QueryableEventsRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+}
+
+message Query {
+  uint64 query_id = 1;
+  string selector = 2;
+  string key_expr = 3;
+  string parameters = 4;
+  bytes payload = 5;
+  string encoding = 6;
+  bytes attachment = 7;
+}
+
+message QueryableEvent {
+  Query query = 1;
+}
+
+message QueryReplyRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  uint64 query_id = 3;
+  string key_expr = 4;
+  bytes payload = 5;
+  string encoding = 6;
+  bytes attachment = 7;
+  string timestamp = 8;
+}
+
+message QueryReplyErrRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  uint64 query_id = 3;
+  bytes payload = 4;
+  string encoding = 5;
+}
+
+message QueryReplyDeleteRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  uint64 query_id = 3;
+  string key_expr = 4;
+  bytes attachment = 5;
+  string timestamp = 6;
+}
+
+message QuerierGetRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  string parameters = 3;
+  bytes payload = 4;
+  string encoding = 5;
+  bytes attachment = 6;
+}
+
+service SessionService {
+  rpc Info(SessionInfoRequest) returns (SessionInfoReply);
+  rpc Put(SessionPutRequest) returns (Empty);
+  rpc Delete(SessionDeleteRequest) returns (Empty);
+  rpc Get(SessionGetRequest) returns (stream Reply);
+  rpc CleanupClient(CleanupClientRequest) returns (Empty);
+}
+
+service PublisherService {
+  rpc DeclarePublisher(DeclarePublisherRequest) returns (HandleReply);
+  rpc Put(PublisherPutRequest) returns (Empty);
+  rpc Delete(PublisherDeleteRequest) returns (Empty);
+  rpc Undeclare(UndeclareRequest) returns (Empty);
+}
+
+service SubscriberService {
+  rpc DeclareSubscriber(DeclareSubscriberRequest) returns (HandleReply);
+  rpc Events(SubscriberEventsRequest) returns (stream SubscriberEvent);
+  rpc Undeclare(UndeclareRequest) returns (Empty);
+}
+
+service QueryableService {
+  rpc DeclareQueryable(DeclareQueryableRequest) returns (HandleReply);
+  rpc Events(QueryableEventsRequest) returns (stream QueryableEvent);
+  rpc Reply(QueryReplyRequest) returns (Empty);
+  rpc ReplyErr(QueryReplyErrRequest) returns (Empty);
+  rpc ReplyDelete(QueryReplyDeleteRequest) returns (Empty);
+  rpc Undeclare(UndeclareRequest) returns (Empty);
+}
+
+service QuerierService {
+  rpc DeclareQuerier(DeclareQuerierRequest) returns (HandleReply);
+  rpc Get(QuerierGetRequest) returns (stream Reply);
+  rpc Undeclare(UndeclareRequest) returns (Empty);
+}

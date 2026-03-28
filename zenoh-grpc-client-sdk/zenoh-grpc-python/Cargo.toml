@@ -1,0 +1,16 @@
+[package]
+name = "zenoh-grpc-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "zenoh_grpc"
+crate-type = ["cdylib"]
+
+[dependencies]
+flume.workspace = true
+pyo3.workspace = true
+tokio.workspace = true
+zenoh-grpc-client-rs.workspace = true
+zenoh-grpc-proto.workspace = true

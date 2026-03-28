@@ -1,0 +1,18 @@
+[package]
+name = "zenoh-grpc-client-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flume.workspace = true
+futures.workspace = true
+http.workspace = true
+hyper-util.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tower.workspace = true
+uuid.workspace = true
+zenoh-grpc-proto.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "zenoh-bridge-grpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zenoh-bridge-grpc"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zenoh.workspace = true
+zenoh-plugin-trait.workspace = true
+zenoh-plugin-grpc.workspace = true

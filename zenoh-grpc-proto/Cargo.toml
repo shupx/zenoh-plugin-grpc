@@ -1,0 +1,14 @@
+[package]
+name = "zenoh-grpc-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+serde.workspace = true
+tonic.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

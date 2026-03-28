@@ -1,0 +1,13 @@
+[package]
+name = "zenoh-grpc-c"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "zenohgrpc"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tokio.workspace = true
+zenoh-grpc-client-rs.workspace = true

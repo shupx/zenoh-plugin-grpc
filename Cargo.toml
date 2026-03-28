@@ -1,0 +1,65 @@
+[workspace]
+members = [
+  "zenoh-grpc-proto",
+  "zenoh-plugin-grpc",
+  "zenoh-bridge-grpc",
+  "zenoh-grpc-client-sdk/zenoh-grpc-client-rs",
+  "zenoh-grpc-client-sdk/zenoh-grpc-c",
+  "zenoh-grpc-client-sdk/zenoh-grpc-python",
+]
+resolver = "3"
+
+[workspace.package]
+version = "1.7.2"
+edition = "2021"
+license = "EPL-2.0 OR Apache-2.0"
+repository = "https://github.com/shupx/zenoh-plugin-grpc"
+homepage = "http://zenoh.io"
+authors = ["OpenAI Codex"]
+description = "gRPC plugin and SDKs for Zenoh"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+async-stream = "0.3.6"
+bytes = "1.10.1"
+clap = { version = "4.5.40", features = ["derive"] }
+flume = "0.11.1"
+futures = "0.3.31"
+futures-core = "0.3.31"
+git-version = "0.3.9"
+http = "1.3.1"
+hyper-util = { version = "0.1.14", features = ["tokio"] }
+lazy_static = "1.5.0"
+pin-project-lite = "0.2.16"
+prost = "0.13.5"
+prost-types = "0.13.5"
+schemars = { version = "0.8.21" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["full"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
+tonic = { version = "0.12.3", features = ["transport"] }
+tonic-build = "0.12.3"
+tower = "0.5.2"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+uuid = { version = "1.17.0", features = ["v4", "serde"] }
+pyo3 = { version = "0.25.1", features = ["abi3-py38", "auto-initialize"] }
+
+zenoh = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", features = [
+  "internal",
+  "plugins",
+  "unstable",
+], version = "1.7.2" }
+zenoh-ext = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", version = "1.7.2" }
+zenoh-plugin-trait = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", version = "1.7.2" }
+zenoh-result = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", version = "1.7.2" }
+zenoh-util = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", version = "1.7.2" }
+
+zenoh-grpc-proto = { path = "zenoh-grpc-proto" }
+zenoh-grpc-client-rs = { path = "zenoh-grpc-client-sdk/zenoh-grpc-client-rs" }
+zenoh-plugin-grpc = { path = "zenoh-plugin-grpc" }
+
+[workspace.metadata.bin]
+zenohd = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "release/1.7.2", version = "1.7.2" }
