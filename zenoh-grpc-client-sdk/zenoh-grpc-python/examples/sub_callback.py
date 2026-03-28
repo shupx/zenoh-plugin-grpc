@@ -6,6 +6,7 @@ def on_sample(event):
     print("callback:", event.key_expr, event.payload)
 
 
+# with zenoh_grpc.Session.connect("unix:///tmp/zenoh-grpc.sock") as session:
 with zenoh_grpc.Session.connect("tcp://127.0.0.1:7335") as session:
     sub = session.declare_subscriber("demo/example/**")
     sub.run(on_sample)
