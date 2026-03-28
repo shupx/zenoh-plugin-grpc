@@ -4,6 +4,10 @@ Rust client core for `zenoh-plugin-grpc`.
 
 The public API uses request structs instead of simplified helper overloads, so callers can pass the gRPC-visible options directly.
 
+`put/delete/reply*` now use local enqueue semantics: a successful call means the request entered a local bounded queue, not that the remote gRPC server has already processed it. When the local send queue is full, the oldest queued item is dropped.
+
+Streamed receives (`subscriber`, `queryable`, `session.get`, `querier.get`) also use local bounded queues with drop-oldest behavior, so slow consumers do not backpressure the gRPC stream reader. Use `dropped_count()` on receivers and `send_dropped_count()` on send-capable objects to observe overflow.
+
 ## Build
 
 ```bash
@@ -60,6 +64,8 @@ publisher
         ..Default::default()
     })
     .await?;
+
+println!("publisher send drops: {}", publisher.send_dropped_count());
 
 let _replies = session
     .get(SessionGetArgs {

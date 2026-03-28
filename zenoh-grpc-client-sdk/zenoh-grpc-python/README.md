@@ -47,6 +47,8 @@ with zenoh_grpc.Session.connect() as session:
 
 The binding keeps Python-style direct function calls and exposes extra gRPC options as optional keyword arguments. If you omit them, the plugin now falls back to Zenoh's native defaults instead of hard-coded wrapper defaults.
 
+`put/delete/reply*` calls are enqueue-style: success means the request entered a local bounded queue. Slow receivers are also isolated behind local bounded queues, and when a queue is full the oldest item is dropped. `Subscriber.dropped_count()`, `Queryable.dropped_count()`, `Publisher.send_dropped_count()`, and `Queryable.send_dropped_count()` expose those counters.
+
 ```python
 import zenoh_grpc
 

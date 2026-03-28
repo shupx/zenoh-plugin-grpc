@@ -6,8 +6,8 @@ use zenoh_grpc_client_rs::{
     ConnectAddr, DeclarePublisherArgs as RsDeclarePublisherArgs,
     DeclareQuerierArgs as RsDeclareQuerierArgs,
     DeclareQueryableArgs as RsDeclareQueryableArgs,
-    DeclareSubscriberArgs as RsDeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQueryable,
-    GrpcSession, GrpcSubscriber, PublisherDeleteArgs as RsPublisherDeleteArgs,
+    DeclareSubscriberArgs as RsDeclareSubscriberArgs, DropOldestReceiver, GrpcPublisher,
+    GrpcQuerier, GrpcQueryable, GrpcSession, GrpcSubscriber, PublisherDeleteArgs as RsPublisherDeleteArgs,
     PublisherPutArgs as RsPublisherPutArgs, QuerierGetArgs as RsQuerierGetArgs,
     QueryReplyArgs as RsQueryReplyArgs, QueryReplyDeleteArgs as RsQueryReplyDeleteArgs,
     QueryReplyErrArgs as RsQueryReplyErrArgs, SessionDeleteArgs as RsSessionDeleteArgs,
@@ -36,7 +36,7 @@ fn parse_connect_addr(endpoint: &str) -> PyResult<ConnectAddr> {
     ))
 }
 
-fn collect_replies(replies: flume::Receiver<pb::Reply>) -> Vec<String> {
+fn collect_replies(replies: DropOldestReceiver<pb::Reply>) -> Vec<String> {
     let mut values = Vec::new();
     while let Ok(reply) = replies.recv() {
         if let Some(value) = format_reply(&reply) {
@@ -338,6 +338,10 @@ impl Publisher {
     fn undeclare(&self) -> PyResult<()> {
         self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
     }
+
+    fn send_dropped_count(&self) -> u64 {
+        self.inner.send_dropped_count()
+    }
 }
 
 #[pymethods]
@@ -373,6 +377,10 @@ impl Subscriber {
 
     fn undeclare(&self) -> PyResult<()> {
         self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
+    }
+
+    fn dropped_count(&self) -> u64 {
+        self.inner.dropped_count()
     }
 
     fn run(&self, callback: Py<PyAny>) {
@@ -465,6 +473,14 @@ impl Queryable {
         self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
     }
 
+    fn dropped_count(&self) -> u64 {
+        self.inner.dropped_count()
+    }
+
+    fn send_dropped_count(&self) -> u64 {
+        self.inner.send_dropped_count()
+    }
+
     fn run(&self, callback: Py<PyAny>) {
         let queryable = self.inner.clone();
         thread::spawn(move || {
@@ -528,6 +544,42 @@ impl SubscriberEvent {
     fn payload(&self) -> Option<Vec<u8>> {
         self.inner.sample.as_ref().map(|s| s.payload.clone())
     }
+
+    #[getter]
+    fn encoding(&self) -> Option<String> {
+        self.inner.sample.as_ref().map(|s| s.encoding.clone())
+    }
+
+    #[getter]
+    fn timestamp(&self) -> Option<String> {
+        self.inner.sample.as_ref().map(|s| s.timestamp.clone())
+    }
+
+    #[getter]
+    fn kind(&self) -> Option<i32> {
+        self.inner.sample.as_ref().map(|s| s.kind)
+    }
+
+    #[getter]
+    fn attachment(&self) -> Option<Vec<u8>> {
+        self.inner.sample.as_ref().map(|s| s.attachment.clone())
+    }
+
+    #[getter]
+    fn source_info_id(&self) -> Option<String> {
+        self.inner
+            .sample
+            .as_ref()
+            .and_then(|s| s.source_info.as_ref().map(|info| info.id.clone()))
+    }
+
+    #[getter]
+    fn source_info_sequence(&self) -> Option<u64> {
+        self.inner
+            .sample
+            .as_ref()
+            .and_then(|s| s.source_info.as_ref().map(|info| info.sequence))
+    }
 }
 
 #[pymethods]
@@ -543,6 +595,11 @@ impl QueryableEvent {
     }
 
     #[getter]
+    fn selector(&self) -> Option<String> {
+        self.inner.query.as_ref().map(|q| q.selector.clone())
+    }
+
+    #[getter]
     fn parameters(&self) -> Option<String> {
         self.inner.query.as_ref().map(|q| q.parameters.clone())
     }
@@ -550,6 +607,16 @@ impl QueryableEvent {
     #[getter]
     fn payload(&self) -> Option<Vec<u8>> {
         self.inner.query.as_ref().map(|q| q.payload.clone())
+    }
+
+    #[getter]
+    fn encoding(&self) -> Option<String> {
+        self.inner.query.as_ref().map(|q| q.encoding.clone())
+    }
+
+    #[getter]
+    fn attachment(&self) -> Option<Vec<u8>> {
+        self.inner.query.as_ref().map(|q| q.attachment.clone())
     }
 }
 

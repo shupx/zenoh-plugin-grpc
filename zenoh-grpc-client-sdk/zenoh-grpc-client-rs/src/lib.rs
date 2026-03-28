@@ -1,8 +1,8 @@
 mod args;
+mod queue;
 
 use std::{path::PathBuf, sync::Arc};
 
-use flume::Receiver;
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
 use tokio::net::UnixStream;
@@ -19,6 +19,8 @@ use zenoh_grpc_proto::v1::{
 };
 
 pub use args::*;
+pub use queue::DropOldestReceiver;
+use queue::{bounded_drop_oldest, DropOldestSender};
 
 #[derive(Debug, Clone)]
 pub enum ConnectAddr {
@@ -43,26 +45,29 @@ struct Inner {
 #[derive(Clone)]
 pub struct GrpcSession {
     inner: Arc<Inner>,
+    write_tx: DropOldestSender<SessionCommand>,
 }
 
 #[derive(Clone)]
 pub struct GrpcPublisher {
     session: GrpcSession,
     handle: u64,
+    write_tx: DropOldestSender<PublisherCommand>,
 }
 
 #[derive(Clone)]
 pub struct GrpcSubscriber {
     session: GrpcSession,
     handle: u64,
-    rx: Receiver<pb::SubscriberEvent>,
+    rx: DropOldestReceiver<pb::SubscriberEvent>,
 }
 
 #[derive(Clone)]
 pub struct GrpcQueryable {
     session: GrpcSession,
     handle: u64,
-    rx: Receiver<pb::QueryableEvent>,
+    rx: DropOldestReceiver<pb::QueryableEvent>,
+    write_tx: DropOldestSender<QueryableCommand>,
 }
 
 #[derive(Clone)]
@@ -70,6 +75,28 @@ pub struct GrpcQuerier {
     session: GrpcSession,
     handle: u64,
 }
+
+#[derive(Debug, Clone)]
+enum SessionCommand {
+    Put(SessionPutArgs),
+    Delete(SessionDeleteArgs),
+}
+
+#[derive(Debug, Clone)]
+enum PublisherCommand {
+    Put(PublisherPutArgs),
+    Delete(PublisherDeleteArgs),
+}
+
+#[derive(Debug, Clone)]
+enum QueryableCommand {
+    Reply(QueryReplyArgs),
+    ReplyErr(QueryReplyErrArgs),
+    ReplyDelete(QueryReplyDeleteArgs),
+}
+
+const SEND_QUEUE_CAPACITY: usize = 256;
+const RECV_QUEUE_CAPACITY: usize = 256;
 
 async fn connect_channel(addr: &ConnectAddr) -> Result<Channel, tonic::transport::Error> {
     match addr {
@@ -89,12 +116,17 @@ async fn connect_channel(addr: &ConnectAddr) -> Result<Channel, tonic::transport
 impl GrpcSession {
     pub async fn connect(addr: ConnectAddr) -> Result<Self, Error> {
         let channel = connect_channel(&addr).await?;
-        Ok(Self {
-            inner: Arc::new(Inner {
-                channel,
-                client_id: Uuid::new_v4().to_string(),
-            }),
-        })
+        let inner = Arc::new(Inner {
+            channel,
+            client_id: Uuid::new_v4().to_string(),
+        });
+        let (write_tx, write_rx) = bounded_drop_oldest(SEND_QUEUE_CAPACITY);
+        let session = Self {
+            inner,
+            write_tx,
+        };
+        session.spawn_session_worker(write_rx);
+        Ok(session)
     }
 
     fn session_client(&self) -> SessionServiceClient<Channel> {
@@ -117,8 +149,56 @@ impl GrpcSession {
         QuerierServiceClient::new(self.inner.channel.clone())
     }
 
+    fn spawn_session_worker(&self, rx: DropOldestReceiver<SessionCommand>) {
+        let session = self.clone();
+        tokio::spawn(async move {
+            while let Ok(command) = rx.recv_async().await {
+                match command {
+                    SessionCommand::Put(req) => {
+                        let _ = session
+                            .session_client()
+                            .put(pb::SessionPutRequest {
+                                client_id: session.inner.client_id.clone(),
+                                key_expr: req.key_expr,
+                                payload: req.payload,
+                                encoding: req.encoding,
+                                congestion_control: req.congestion_control,
+                                priority: req.priority,
+                                express: req.express,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                                allowed_destination: req.allowed_destination,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                    SessionCommand::Delete(req) => {
+                        let _ = session
+                            .session_client()
+                            .delete(pb::SessionDeleteRequest {
+                                client_id: session.inner.client_id.clone(),
+                                key_expr: req.key_expr,
+                                congestion_control: req.congestion_control,
+                                priority: req.priority,
+                                express: req.express,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                                allowed_destination: req.allowed_destination,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                }
+            }
+        });
+    }
+
     pub fn client_id(&self) -> &str {
         &self.inner.client_id
+    }
+
+    pub fn send_dropped_count(&self) -> u64 {
+        self.write_tx.dropped_count()
     }
 
     pub async fn info(&self) -> Result<pb::SessionInfoReply, Error> {
@@ -132,40 +212,18 @@ impl GrpcSession {
     }
 
     pub async fn put(&self, req: SessionPutArgs) -> Result<(), Error> {
-        self.session_client()
-            .put(pb::SessionPutRequest {
-                client_id: self.inner.client_id.clone(),
-                key_expr: req.key_expr,
-                payload: req.payload,
-                encoding: req.encoding,
-                congestion_control: req.congestion_control,
-                priority: req.priority,
-                express: req.express,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-                allowed_destination: req.allowed_destination,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(SessionCommand::Put(req))
+            .map_err(|_| tonic::Status::unavailable("session send queue closed").into())
     }
 
     pub async fn delete(&self, req: SessionDeleteArgs) -> Result<(), Error> {
-        self.session_client()
-            .delete(pb::SessionDeleteRequest {
-                client_id: self.inner.client_id.clone(),
-                key_expr: req.key_expr,
-                congestion_control: req.congestion_control,
-                priority: req.priority,
-                express: req.express,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-                allowed_destination: req.allowed_destination,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(SessionCommand::Delete(req))
+            .map_err(|_| tonic::Status::unavailable("session send queue closed").into())
     }
 
-    pub async fn get(&self, req: SessionGetArgs) -> Result<Receiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: SessionGetArgs) -> Result<DropOldestReceiver<pb::Reply>, Error> {
         let mut stream = self
             .session_client()
             .get(pb::SessionGetRequest {
@@ -181,16 +239,17 @@ impl GrpcSession {
             })
             .await?
             .into_inner();
-        let (tx, rx) = flume::bounded(256);
+        let (tx, rx) = bounded_drop_oldest(RECV_QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Ok(Some(reply)) = stream.message().await {
-                let _ = tx.send_async(reply).await;
+                let _ = tx.push(reply);
             }
         });
         Ok(rx)
     }
 
     pub async fn cleanup(&self) -> Result<(), Error> {
+        self.write_tx.wait_empty().await;
         self.session_client()
             .cleanup_client(pb::CleanupClientRequest {
                 client_id: self.inner.client_id.clone(),
@@ -218,6 +277,16 @@ impl GrpcSession {
         Ok(GrpcPublisher {
             session: self.clone(),
             handle,
+            write_tx: {
+                let (tx, rx) = bounded_drop_oldest(SEND_QUEUE_CAPACITY);
+                let publisher = GrpcPublisher {
+                    session: self.clone(),
+                    handle,
+                    write_tx: tx.clone(),
+                };
+                publisher.spawn_worker(rx);
+                tx
+            },
         })
     }
 
@@ -240,10 +309,10 @@ impl GrpcSession {
             })
             .await?
             .into_inner();
-        let (tx, rx) = flume::bounded(256);
+        let (tx, rx) = bounded_drop_oldest(RECV_QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Ok(Some(event)) = stream.message().await {
-                let _ = tx.send_async(event).await;
+                let _ = tx.push(event);
             }
         });
         Ok(GrpcSubscriber {
@@ -273,17 +342,21 @@ impl GrpcSession {
             })
             .await?
             .into_inner();
-        let (tx, rx) = flume::bounded(256);
+        let (tx, rx) = bounded_drop_oldest(RECV_QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Ok(Some(event)) = stream.message().await {
-                let _ = tx.send_async(event).await;
+                let _ = tx.push(event);
             }
         });
-        Ok(GrpcQueryable {
+        let (write_tx, write_rx) = bounded_drop_oldest(SEND_QUEUE_CAPACITY);
+        let queryable = GrpcQueryable {
             session: self.clone(),
             handle,
             rx,
-        })
+            write_tx,
+        };
+        queryable.spawn_worker(write_rx);
+        Ok(queryable)
     }
 
     pub async fn declare_querier(&self, req: DeclareQuerierArgs) -> Result<GrpcQuerier, Error> {
@@ -334,39 +407,66 @@ impl Drop for GrpcSession {
 }
 
 impl GrpcPublisher {
+    fn spawn_worker(&self, rx: DropOldestReceiver<PublisherCommand>) {
+        let publisher = self.clone();
+        tokio::spawn(async move {
+            while let Ok(command) = rx.recv_async().await {
+                match command {
+                    PublisherCommand::Put(req) => {
+                        let _ = publisher
+                            .session
+                            .publisher_client()
+                            .put(pb::PublisherPutRequest {
+                                client_id: publisher.session.inner.client_id.clone(),
+                                handle: publisher.handle,
+                                payload: req.payload,
+                                encoding: req.encoding,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                    PublisherCommand::Delete(req) => {
+                        let _ = publisher
+                            .session
+                            .publisher_client()
+                            .delete(pb::PublisherDeleteRequest {
+                                client_id: publisher.session.inner.client_id.clone(),
+                                handle: publisher.handle,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                }
+            }
+        });
+    }
+
     pub fn handle(&self) -> u64 {
         self.handle
     }
 
+    pub fn send_dropped_count(&self) -> u64 {
+        self.write_tx.dropped_count()
+    }
+
     pub async fn put(&self, req: PublisherPutArgs) -> Result<(), Error> {
-        self.session
-            .publisher_client()
-            .put(pb::PublisherPutRequest {
-                client_id: self.session.inner.client_id.clone(),
-                handle: self.handle,
-                payload: req.payload,
-                encoding: req.encoding,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(PublisherCommand::Put(req))
+            .map_err(|_| tonic::Status::unavailable("publisher send queue closed").into())
     }
 
     pub async fn delete(&self, req: PublisherDeleteArgs) -> Result<(), Error> {
-        self.session
-            .publisher_client()
-            .delete(pb::PublisherDeleteRequest {
-                client_id: self.session.inner.client_id.clone(),
-                handle: self.handle,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(PublisherCommand::Delete(req))
+            .map_err(|_| tonic::Status::unavailable("publisher send queue closed").into())
     }
 
     pub async fn undeclare(&self) -> Result<(), Error> {
+        self.write_tx.wait_empty().await;
         self.session
             .publisher_client()
             .undeclare(pb::UndeclareRequest {
@@ -383,8 +483,12 @@ impl GrpcSubscriber {
         self.handle
     }
 
-    pub fn receiver(&self) -> &Receiver<pb::SubscriberEvent> {
+    pub fn receiver(&self) -> &DropOldestReceiver<pb::SubscriberEvent> {
         &self.rx
+    }
+
+    pub fn dropped_count(&self) -> u64 {
+        self.rx.dropped_count()
     }
 
     pub async fn undeclare(&self) -> Result<(), Error> {
@@ -400,61 +504,98 @@ impl GrpcSubscriber {
 }
 
 impl GrpcQueryable {
+    fn spawn_worker(&self, rx: DropOldestReceiver<QueryableCommand>) {
+        let queryable = self.clone();
+        tokio::spawn(async move {
+            while let Ok(command) = rx.recv_async().await {
+                match command {
+                    QueryableCommand::Reply(req) => {
+                        let _ = queryable
+                            .session
+                            .queryable_client()
+                            .reply(pb::QueryReplyRequest {
+                                client_id: queryable.session.inner.client_id.clone(),
+                                handle: queryable.handle,
+                                query_id: req.query_id,
+                                key_expr: req.key_expr,
+                                payload: req.payload,
+                                encoding: req.encoding,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                    QueryableCommand::ReplyErr(req) => {
+                        let _ = queryable
+                            .session
+                            .queryable_client()
+                            .reply_err(pb::QueryReplyErrRequest {
+                                client_id: queryable.session.inner.client_id.clone(),
+                                handle: queryable.handle,
+                                query_id: req.query_id,
+                                payload: req.payload,
+                                encoding: req.encoding,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                    QueryableCommand::ReplyDelete(req) => {
+                        let _ = queryable
+                            .session
+                            .queryable_client()
+                            .reply_delete(pb::QueryReplyDeleteRequest {
+                                client_id: queryable.session.inner.client_id.clone(),
+                                handle: queryable.handle,
+                                query_id: req.query_id,
+                                key_expr: req.key_expr,
+                                attachment: req.attachment,
+                                timestamp: req.timestamp,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
+                }
+            }
+        });
+    }
+
     pub fn handle(&self) -> u64 {
         self.handle
     }
 
-    pub fn receiver(&self) -> &Receiver<pb::QueryableEvent> {
+    pub fn send_dropped_count(&self) -> u64 {
+        self.write_tx.dropped_count()
+    }
+
+    pub fn receiver(&self) -> &DropOldestReceiver<pb::QueryableEvent> {
         &self.rx
     }
 
+    pub fn dropped_count(&self) -> u64 {
+        self.rx.dropped_count()
+    }
+
     pub async fn reply(&self, req: QueryReplyArgs) -> Result<(), Error> {
-        self.session
-            .queryable_client()
-            .reply(pb::QueryReplyRequest {
-                client_id: self.session.inner.client_id.clone(),
-                handle: self.handle,
-                query_id: req.query_id,
-                key_expr: req.key_expr,
-                payload: req.payload,
-                encoding: req.encoding,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(QueryableCommand::Reply(req))
+            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
     }
 
     pub async fn reply_err(&self, req: QueryReplyErrArgs) -> Result<(), Error> {
-        self.session
-            .queryable_client()
-            .reply_err(pb::QueryReplyErrRequest {
-                client_id: self.session.inner.client_id.clone(),
-                handle: self.handle,
-                query_id: req.query_id,
-                payload: req.payload,
-                encoding: req.encoding,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(QueryableCommand::ReplyErr(req))
+            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
     }
 
     pub async fn reply_delete(&self, req: QueryReplyDeleteArgs) -> Result<(), Error> {
-        self.session
-            .queryable_client()
-            .reply_delete(pb::QueryReplyDeleteRequest {
-                client_id: self.session.inner.client_id.clone(),
-                handle: self.handle,
-                query_id: req.query_id,
-                key_expr: req.key_expr,
-                attachment: req.attachment,
-                timestamp: req.timestamp,
-            })
-            .await?;
-        Ok(())
+        self.write_tx
+            .push(QueryableCommand::ReplyDelete(req))
+            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
     }
 
     pub async fn undeclare(&self) -> Result<(), Error> {
+        self.write_tx.wait_empty().await;
         self.session
             .queryable_client()
             .undeclare(pb::UndeclareRequest {
@@ -471,7 +612,7 @@ impl GrpcQuerier {
         self.handle
     }
 
-    pub async fn get(&self, req: QuerierGetArgs) -> Result<Receiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: QuerierGetArgs) -> Result<DropOldestReceiver<pb::Reply>, Error> {
         let mut stream = self
             .session
             .querier_client()
@@ -485,10 +626,10 @@ impl GrpcQuerier {
             })
             .await?
             .into_inner();
-        let (tx, rx) = flume::bounded(256);
+        let (tx, rx) = bounded_drop_oldest(RECV_QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Ok(Some(reply)) = stream.message().await {
-                let _ = tx.send_async(reply).await;
+                let _ = tx.push(reply);
             }
         });
         Ok(rx)
