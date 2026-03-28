@@ -20,6 +20,9 @@ use zenoh_grpc_proto::v1::{
 
 pub use args::*;
 pub use queue::DropOldestReceiver;
+pub use pb::{
+    CongestionControl, ConsolidationMode, Locality, Priority, QueryTarget, Reliability, SampleKind,
+};
 use queue::{bounded_drop_oldest, DropOldestSender};
 
 #[derive(Debug, Clone)]
