@@ -9,5 +9,7 @@ name = "zenohgrpc"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+flume.workspace = true
 tokio.workspace = true
 zenoh-grpc-client-rs.workspace = true
+zenoh-grpc-proto.workspace = true

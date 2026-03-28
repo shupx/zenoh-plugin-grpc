@@ -1,3 +1,5 @@
+mod args;
+
 use std::{path::PathBuf, sync::Arc};
 
 use flume::Receiver;
@@ -15,6 +17,8 @@ use zenoh_grpc_proto::v1::{
     session_service_client::SessionServiceClient,
     subscriber_service_client::SubscriberServiceClient,
 };
+
+pub use args::*;
 
 #[derive(Debug, Clone)]
 pub enum ConnectAddr {
@@ -47,12 +51,14 @@ pub struct GrpcPublisher {
     handle: u64,
 }
 
+#[derive(Clone)]
 pub struct GrpcSubscriber {
     session: GrpcSession,
     handle: u64,
     rx: Receiver<pb::SubscriberEvent>,
 }
 
+#[derive(Clone)]
 pub struct GrpcQueryable {
     session: GrpcSession,
     handle: u64,
@@ -125,53 +131,53 @@ impl GrpcSession {
             .into_inner())
     }
 
-    pub async fn put(&self, key_expr: impl Into<String>, payload: Vec<u8>) -> Result<(), Error> {
+    pub async fn put(&self, req: SessionPutArgs) -> Result<(), Error> {
         self.session_client()
             .put(pb::SessionPutRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                payload,
-                encoding: String::new(),
-                congestion_control: 0,
-                priority: 0,
-                express: false,
-                attachment: Vec::new(),
-                timestamp: String::new(),
-                allowed_destination: 0,
+                key_expr: req.key_expr,
+                payload: req.payload,
+                encoding: req.encoding,
+                congestion_control: req.congestion_control,
+                priority: req.priority,
+                express: req.express,
+                attachment: req.attachment,
+                timestamp: req.timestamp,
+                allowed_destination: req.allowed_destination,
             })
             .await?;
         Ok(())
     }
 
-    pub async fn delete(&self, key_expr: impl Into<String>) -> Result<(), Error> {
+    pub async fn delete(&self, req: SessionDeleteArgs) -> Result<(), Error> {
         self.session_client()
             .delete(pb::SessionDeleteRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                congestion_control: 0,
-                priority: 0,
-                express: false,
-                attachment: Vec::new(),
-                timestamp: String::new(),
-                allowed_destination: 0,
+                key_expr: req.key_expr,
+                congestion_control: req.congestion_control,
+                priority: req.priority,
+                express: req.express,
+                attachment: req.attachment,
+                timestamp: req.timestamp,
+                allowed_destination: req.allowed_destination,
             })
             .await?;
         Ok(())
     }
 
-    pub async fn get(&self, selector: impl Into<String>) -> Result<Receiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: SessionGetArgs) -> Result<Receiver<pb::Reply>, Error> {
         let mut stream = self
             .session_client()
             .get(pb::SessionGetRequest {
                 client_id: self.inner.client_id.clone(),
-                selector: selector.into(),
-                target: 0,
-                consolidation: 0,
-                timeout_ms: 10_000,
-                payload: Vec::new(),
-                encoding: String::new(),
-                attachment: Vec::new(),
-                allowed_destination: 0,
+                selector: req.selector,
+                target: req.target,
+                consolidation: req.consolidation,
+                timeout_ms: req.timeout_ms,
+                payload: req.payload,
+                encoding: req.encoding,
+                attachment: req.attachment,
+                allowed_destination: req.allowed_destination,
             })
             .await?
             .into_inner();
@@ -193,18 +199,18 @@ impl GrpcSession {
         Ok(())
     }
 
-    pub async fn declare_publisher(&self, key_expr: impl Into<String>) -> Result<GrpcPublisher, Error> {
+    pub async fn declare_publisher(&self, req: DeclarePublisherArgs) -> Result<GrpcPublisher, Error> {
         let handle = self
             .publisher_client()
             .declare_publisher(pb::DeclarePublisherRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                encoding: String::new(),
-                congestion_control: 0,
-                priority: 0,
-                express: false,
-                reliability: 0,
-                allowed_destination: 0,
+                key_expr: req.key_expr,
+                encoding: req.encoding,
+                congestion_control: req.congestion_control,
+                priority: req.priority,
+                express: req.express,
+                reliability: req.reliability,
+                allowed_destination: req.allowed_destination,
             })
             .await?
             .into_inner()
@@ -215,16 +221,13 @@ impl GrpcSession {
         })
     }
 
-    pub async fn declare_subscriber(
-        &self,
-        key_expr: impl Into<String>,
-    ) -> Result<GrpcSubscriber, Error> {
+    pub async fn declare_subscriber(&self, req: DeclareSubscriberArgs) -> Result<GrpcSubscriber, Error> {
         let handle = self
             .subscriber_client()
             .declare_subscriber(pb::DeclareSubscriberRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                allowed_origin: 0,
+                key_expr: req.key_expr,
+                allowed_origin: req.allowed_origin,
             })
             .await?
             .into_inner()
@@ -250,14 +253,14 @@ impl GrpcSession {
         })
     }
 
-    pub async fn declare_queryable(&self, key_expr: impl Into<String>) -> Result<GrpcQueryable, Error> {
+    pub async fn declare_queryable(&self, req: DeclareQueryableArgs) -> Result<GrpcQueryable, Error> {
         let handle = self
             .queryable_client()
             .declare_queryable(pb::DeclareQueryableRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                complete: false,
-                allowed_origin: 0,
+                key_expr: req.key_expr,
+                complete: req.complete,
+                allowed_origin: req.allowed_origin,
             })
             .await?
             .into_inner()
@@ -283,16 +286,16 @@ impl GrpcSession {
         })
     }
 
-    pub async fn declare_querier(&self, key_expr: impl Into<String>) -> Result<GrpcQuerier, Error> {
+    pub async fn declare_querier(&self, req: DeclareQuerierArgs) -> Result<GrpcQuerier, Error> {
         let handle = self
             .querier_client()
             .declare_querier(pb::DeclareQuerierRequest {
                 client_id: self.inner.client_id.clone(),
-                key_expr: key_expr.into(),
-                target: 0,
-                consolidation: 0,
-                timeout_ms: 10_000,
-                allowed_destination: 0,
+                key_expr: req.key_expr,
+                target: req.target,
+                consolidation: req.consolidation,
+                timeout_ms: req.timeout_ms,
+                allowed_destination: req.allowed_destination,
             })
             .await?
             .into_inner()
@@ -306,10 +309,27 @@ impl GrpcSession {
 
 impl Drop for GrpcSession {
     fn drop(&mut self) {
-        let session = self.clone();
-        tokio::spawn(async move {
-            let _ = session.cleanup().await;
-        });
+        if Arc::strong_count(&self.inner) == 1 {
+            let channel = self.inner.channel.clone();
+            let client_id = self.inner.client_id.clone();
+            let cleanup = async move {
+                let _ = SessionServiceClient::new(channel)
+                    .cleanup_client(pb::CleanupClientRequest { client_id })
+                    .await;
+            };
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(cleanup);
+            } else {
+                std::thread::spawn(move || {
+                    if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        rt.block_on(cleanup);
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -318,29 +338,29 @@ impl GrpcPublisher {
         self.handle
     }
 
-    pub async fn put(&self, payload: Vec<u8>) -> Result<(), Error> {
+    pub async fn put(&self, req: PublisherPutArgs) -> Result<(), Error> {
         self.session
             .publisher_client()
             .put(pb::PublisherPutRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                payload,
-                encoding: String::new(),
-                attachment: Vec::new(),
-                timestamp: String::new(),
+                payload: req.payload,
+                encoding: req.encoding,
+                attachment: req.attachment,
+                timestamp: req.timestamp,
             })
             .await?;
         Ok(())
     }
 
-    pub async fn delete(&self) -> Result<(), Error> {
+    pub async fn delete(&self, req: PublisherDeleteArgs) -> Result<(), Error> {
         self.session
             .publisher_client()
             .delete(pb::PublisherDeleteRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                attachment: Vec::new(),
-                timestamp: String::new(),
+                attachment: req.attachment,
+                timestamp: req.timestamp,
             })
             .await?;
         Ok(())
@@ -388,47 +408,47 @@ impl GrpcQueryable {
         &self.rx
     }
 
-    pub async fn reply(&self, query_id: u64, key_expr: impl Into<String>, payload: Vec<u8>) -> Result<(), Error> {
+    pub async fn reply(&self, req: QueryReplyArgs) -> Result<(), Error> {
         self.session
             .queryable_client()
             .reply(pb::QueryReplyRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                query_id,
-                key_expr: key_expr.into(),
-                payload,
-                encoding: String::new(),
-                attachment: Vec::new(),
-                timestamp: String::new(),
+                query_id: req.query_id,
+                key_expr: req.key_expr,
+                payload: req.payload,
+                encoding: req.encoding,
+                attachment: req.attachment,
+                timestamp: req.timestamp,
             })
             .await?;
         Ok(())
     }
 
-    pub async fn reply_err(&self, query_id: u64, payload: Vec<u8>) -> Result<(), Error> {
+    pub async fn reply_err(&self, req: QueryReplyErrArgs) -> Result<(), Error> {
         self.session
             .queryable_client()
             .reply_err(pb::QueryReplyErrRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                query_id,
-                payload,
-                encoding: String::new(),
+                query_id: req.query_id,
+                payload: req.payload,
+                encoding: req.encoding,
             })
             .await?;
         Ok(())
     }
 
-    pub async fn reply_delete(&self, query_id: u64, key_expr: impl Into<String>) -> Result<(), Error> {
+    pub async fn reply_delete(&self, req: QueryReplyDeleteArgs) -> Result<(), Error> {
         self.session
             .queryable_client()
             .reply_delete(pb::QueryReplyDeleteRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                query_id,
-                key_expr: key_expr.into(),
-                attachment: Vec::new(),
-                timestamp: String::new(),
+                query_id: req.query_id,
+                key_expr: req.key_expr,
+                attachment: req.attachment,
+                timestamp: req.timestamp,
             })
             .await?;
         Ok(())
@@ -451,17 +471,17 @@ impl GrpcQuerier {
         self.handle
     }
 
-    pub async fn get(&self, parameters: impl Into<String>) -> Result<Receiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: QuerierGetArgs) -> Result<Receiver<pb::Reply>, Error> {
         let mut stream = self
             .session
             .querier_client()
             .get(pb::QuerierGetRequest {
                 client_id: self.session.inner.client_id.clone(),
                 handle: self.handle,
-                parameters: parameters.into(),
-                payload: Vec::new(),
-                encoding: String::new(),
-                attachment: Vec::new(),
+                parameters: req.parameters,
+                payload: req.payload,
+                encoding: req.encoding,
+                attachment: req.attachment,
             })
             .await?
             .into_inner();

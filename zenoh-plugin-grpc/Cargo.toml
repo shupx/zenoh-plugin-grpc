@@ -39,3 +39,6 @@ zenoh-plugin-trait.workspace = true
 zenoh-result.workspace = true
 zenoh-util.workspace = true
 zenoh-grpc-proto.workspace = true
+
+[dev-dependencies]
+zenoh-grpc-client-rs.workspace = true

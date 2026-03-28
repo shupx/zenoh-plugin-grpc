@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 flume.workspace = true
-pyo3.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
 tokio.workspace = true
 zenoh-grpc-client-rs.workspace = true
 zenoh-grpc-proto.workspace = true

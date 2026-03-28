@@ -412,8 +412,10 @@ impl SessionService for GrpcServer {
         builder = builder
             .target(map_query_target(req.target))
             .consolidation(map_consolidation(req.consolidation))
-            .timeout(Duration::from_millis(req.timeout_ms))
             .allowed_destination(map_locality(req.allowed_destination));
+        if req.timeout_ms != 0 {
+            builder = builder.timeout(Duration::from_millis(req.timeout_ms));
+        }
         if !req.payload.is_empty() {
             builder = builder.payload(req.payload).encoding(Encoding::from(req.encoding));
         }
@@ -789,10 +791,15 @@ impl QuerierService for GrpcServer {
             .declare_querier(req.key_expr)
             .target(map_query_target(req.target))
             .consolidation(map_consolidation(req.consolidation))
-            .timeout(Duration::from_millis(req.timeout_ms))
             .allowed_destination(map_locality(req.allowed_destination))
-            .await
-            .map_err(internal_status)?;
+            ;
+        let querier = if req.timeout_ms != 0 {
+            querier.timeout(Duration::from_millis(req.timeout_ms))
+        } else {
+            querier
+        }
+        .await
+        .map_err(internal_status)?;
         self.state.queriers.write().await.insert(
             handle,
             QuerierEntry {
@@ -917,5 +924,251 @@ async fn run(runtime: DynamicRuntime, config: Config, stop: Arc<Notify>) {
     tokio::time::sleep(config.shutdown_grace_period).await;
     for task in tasks {
         task.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener as StdTcpListener;
+
+    use tokio::time::{sleep, timeout};
+    use zenoh::{
+        config::Config as ZenohConfig,
+        internal::runtime::{DynamicRuntime, Runtime, RuntimeBuilder},
+    };
+    use zenoh_grpc_client_rs::{
+        ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
+        DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs,
+        SessionGetArgs,
+    };
+
+    struct TestHarness {
+        addr: String,
+        stop: Arc<Notify>,
+        _runtime: Runtime,
+        _task: JoinHandle<()>,
+    }
+
+    impl Drop for TestHarness {
+        fn drop(&mut self) {
+            self.stop.notify_waiters();
+        }
+    }
+
+    fn free_port() -> u16 {
+        StdTcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    async fn start_harness() -> TestHarness {
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut runtime = RuntimeBuilder::new(ZenohConfig::default())
+            .build()
+            .await
+            .unwrap();
+        runtime.start().await.unwrap();
+        let stop = Arc::new(Notify::new());
+        let config = Config {
+            host: "127.0.0.1".into(),
+            port,
+            ..Config::default()
+        };
+        let dynamic_runtime: DynamicRuntime = runtime.clone().into();
+        let task = spawn_runtime(run(dynamic_runtime, config, stop.clone()));
+
+        for _ in 0..20 {
+            if GrpcSession::connect(ConnectAddr::Tcp(addr.clone()))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+
+        TestHarness {
+            addr,
+            stop,
+            _runtime: runtime,
+            _task: task,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pub_sub_e2e() {
+        let harness = start_harness().await;
+        let sub_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let pub_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+
+        let subscriber = sub_client
+            .declare_subscriber(DeclareSubscriberArgs {
+                key_expr: "demo/e2e/**".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let publisher = pub_client
+            .declare_publisher(DeclarePublisherArgs {
+                key_expr: "demo/e2e/value".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        publisher
+            .put(PublisherPutArgs {
+                payload: b"hello".to_vec(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let event = timeout(Duration::from_secs(5), subscriber.receiver().recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        let sample = event.sample.unwrap();
+        assert_eq!(sample.key_expr, "demo/e2e/value");
+        assert_eq!(sample.payload, b"hello".to_vec());
+
+        publisher.undeclare().await.unwrap();
+        subscriber.undeclare().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queryable_session_get_e2e() {
+        let harness = start_harness().await;
+        let queryable_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let getter_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+
+        let queryable = queryable_client
+            .declare_queryable(DeclareQueryableArgs {
+                key_expr: "demo/query/**".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let queryable_task = {
+            let queryable = queryable;
+            tokio::spawn(async move {
+                let event = timeout(Duration::from_secs(5), queryable.receiver().recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let query = event.query.unwrap();
+                queryable
+                    .reply(QueryReplyArgs {
+                        query_id: query.query_id,
+                        key_expr: "demo/query/value".into(),
+                        payload: b"world".to_vec(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                queryable.undeclare().await.unwrap();
+            })
+        };
+
+        let replies = getter_client
+            .get(SessionGetArgs {
+                selector: "demo/query/value".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let reply = timeout(Duration::from_secs(5), replies.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        let sample = match reply.result.unwrap() {
+            pb::reply::Result::Sample(sample) => sample,
+            pb::reply::Result::Error(err) => panic!("unexpected error reply: {:?}", err),
+        };
+        assert_eq!(sample.key_expr, "demo/query/value");
+        assert_eq!(sample.payload, b"world".to_vec());
+
+        queryable_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queryable_querier_e2e() {
+        let harness = start_harness().await;
+        let queryable_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let querier_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+
+        let queryable = queryable_client
+            .declare_queryable(DeclareQueryableArgs {
+                key_expr: "demo/querier/**".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let querier = querier_client
+            .declare_querier(DeclareQuerierArgs {
+                key_expr: "demo/querier/**".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let queryable_task = {
+            let queryable = queryable;
+            tokio::spawn(async move {
+                let event = timeout(Duration::from_secs(5), queryable.receiver().recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let query = event.query.unwrap();
+                queryable
+                    .reply(QueryReplyArgs {
+                        query_id: query.query_id,
+                        key_expr: "demo/querier/value".into(),
+                        payload: b"querier".to_vec(),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+                queryable.undeclare().await.unwrap();
+            })
+        };
+
+        let replies = querier
+            .get(QuerierGetArgs {
+                parameters: String::new(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let reply = timeout(Duration::from_secs(5), replies.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        let sample = match reply.result.unwrap() {
+            pb::reply::Result::Sample(sample) => sample,
+            pb::reply::Result::Error(err) => panic!("unexpected error reply: {:?}", err),
+        };
+        assert_eq!(sample.key_expr, "demo/querier/value");
+        assert_eq!(sample.payload, b"querier".to_vec());
+
+        querier.undeclare().await.unwrap();
+        queryable_task.await.unwrap();
     }
 }

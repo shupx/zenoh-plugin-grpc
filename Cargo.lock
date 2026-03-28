@@ -4431,8 +4431,10 @@ dependencies = [
 name = "zenoh-grpc-c"
 version = "1.7.2"
 dependencies = [
+ "flume",
  "tokio",
  "zenoh-grpc-client-rs",
+ "zenoh-grpc-proto",
 ]
 
 [[package]]
@@ -4727,6 +4729,7 @@ dependencies = [
  "uuid",
  "zenoh",
  "zenoh-ext",
+ "zenoh-grpc-client-rs",
  "zenoh-grpc-proto",
  "zenoh-plugin-trait",
  "zenoh-result",
