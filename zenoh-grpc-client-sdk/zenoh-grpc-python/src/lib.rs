@@ -104,7 +104,7 @@ impl Session {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (endpoint = "tcp://127.0.0.1:7335".to_string()))]
+    #[pyo3(signature = (endpoint = "unix:///tmp/zenoh-grpc.sock".to_string()))]
     fn connect(endpoint: String) -> PyResult<Self> {
         let rt = runtime();
         let inner = rt

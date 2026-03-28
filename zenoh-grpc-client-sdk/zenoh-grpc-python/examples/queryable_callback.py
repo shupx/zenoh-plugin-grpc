@@ -5,7 +5,7 @@ import zenoh_grpc
 done = threading.Event()
 
 
-with zenoh_grpc.Session.connect("tcp://127.0.0.1:7335") as session:
+with zenoh_grpc.Session.connect() as session:
     queryable = session.declare_queryable("demo/query/**", complete=False)
 
     def on_query(event):

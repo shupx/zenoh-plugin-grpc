@@ -33,8 +33,7 @@ Example `zenoh.json5`:
     grpc: {
       host: "127.0.0.1",
       port: 7335,
-      // optional:
-      // uds_path: "/tmp/zenoh-grpc.sock",
+      uds_path: "/tmp/zenoh-grpc.sock",
     },
   },
 }
@@ -49,4 +48,4 @@ zenohd -c zenoh.json5
 ## Default Listen Address
 
 - TCP: `127.0.0.1:7335`
-- UDS: disabled unless `uds_path` is configured
+- UDS: `/tmp/zenoh-grpc.sock`

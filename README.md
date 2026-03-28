@@ -23,13 +23,13 @@ cargo check --workspace
 Start the standalone bridge:
 
 ```bash
-cargo run -p zenoh-bridge-grpc -- --grpc-host 127.0.0.1 --grpc-port 7335
+cargo run -p zenoh-bridge-grpc
 ```
 
 Then connect from a client SDK to:
 
 ```text
-127.0.0.1:7335
+unix:///tmp/zenoh-grpc.sock
 ```
 
 ## Plugin Mode

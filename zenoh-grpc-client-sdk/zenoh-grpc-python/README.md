@@ -21,7 +21,7 @@ maturin build
 Use either:
 
 ```bash
-cargo run -p zenoh-bridge-grpc -- --grpc-host 127.0.0.1 --grpc-port 7335
+cargo run -p zenoh-bridge-grpc
 ```
 
 or `zenohd` with the plugin loaded.
@@ -31,12 +31,12 @@ or `zenohd` with the plugin loaded.
 ```python
 import zenoh_grpc
 
-with zenoh_grpc.Session.connect("tcp://127.0.0.1:7335") as session:
+with zenoh_grpc.Session.connect() as session:
     pub = session.declare_publisher("demo/example", encoding="text/plain")
     pub.put(b"hello", encoding="text/plain")
 ```
 
-`Session.connect()` defaults to `tcp://127.0.0.1:7335`, so the shortest form is:
+`Session.connect()` defaults to `unix:///tmp/zenoh-grpc.sock`, so the shortest form is:
 
 ```python
 with zenoh_grpc.Session.connect() as session:
@@ -52,7 +52,7 @@ The binding keeps Python-style direct function calls and exposes extra gRPC opti
 ```python
 import zenoh_grpc
 
-with zenoh_grpc.Session.connect("tcp://127.0.0.1:7335") as session:
+with zenoh_grpc.Session.connect() as session:
     pub = session.declare_publisher(
         "demo/example",
         encoding="text/plain",
@@ -65,8 +65,8 @@ with zenoh_grpc.Session.connect("tcp://127.0.0.1:7335") as session:
 
 Supported endpoint formats:
 
-- `tcp://127.0.0.1:7335`
 - `unix:///tmp/zenoh-grpc.sock`
+- `tcp://127.0.0.1:7335`
 
 ## Examples
 

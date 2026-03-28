@@ -9,6 +9,7 @@ use serde::{
 
 pub const DEFAULT_HOST: &str = "127.0.0.1";
 pub const DEFAULT_PORT: u16 = 7335;
+pub const DEFAULT_UDS_PATH: &str = "/tmp/zenoh-grpc.sock";
 pub const DEFAULT_MAX_RECV_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_SEND_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 pub const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 3_000;
@@ -22,7 +23,7 @@ pub struct Config {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    #[serde(default)]
+    #[serde(default = "default_uds_path")]
     pub uds_path: Option<String>,
     #[serde(default = "default_max_recv_message_size")]
     pub max_recv_message_size: usize,
@@ -53,7 +54,7 @@ impl Default for Config {
             listen: None,
             host: default_host(),
             port: default_port(),
-            uds_path: None,
+            uds_path: default_uds_path(),
             max_recv_message_size: default_max_recv_message_size(),
             max_send_message_size: default_max_send_message_size(),
             shutdown_grace_period: Duration::from_millis(default_shutdown_grace_period_ms()),
@@ -91,6 +92,10 @@ fn default_host() -> String {
 
 fn default_port() -> u16 {
     DEFAULT_PORT
+}
+
+fn default_uds_path() -> Option<String> {
+    Some(DEFAULT_UDS_PATH.to_string())
 }
 
 fn default_max_recv_message_size() -> usize {
@@ -177,14 +182,17 @@ impl<'de> Visitor<'de> for PathVisitor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, ListenEndpoint, DEFAULT_HOST, DEFAULT_PORT};
+    use super::{Config, ListenEndpoint, DEFAULT_HOST, DEFAULT_PORT, DEFAULT_UDS_PATH};
 
     #[test]
-    fn default_tcp_listener() {
+    fn default_listeners_include_tcp_and_uds() {
         let config = Config::default();
         assert_eq!(
             config.listeners().unwrap(),
-            vec![ListenEndpoint::Tcp(format!("{DEFAULT_HOST}:{DEFAULT_PORT}"))]
+            vec![
+                ListenEndpoint::Tcp(format!("{DEFAULT_HOST}:{DEFAULT_PORT}")),
+                ListenEndpoint::Unix(DEFAULT_UDS_PATH.into())
+            ]
         );
     }
 
