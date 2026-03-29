@@ -12,6 +12,6 @@ with zenoh_grpc.Session.connect() as session:
             query.drop()
 
     queryable = session.declare_queryable("demo/query/**", callback=on_query, complete=False, allowed_origin=zenoh_grpc.Locality.ANY) 
-    # this auto spawns a separate thread to handle query callbacks, so that the callback can reply to queries in time without blocking the main thread. But the callbacks all share the same thread, so they are executed sequentially. If you want to handle queries in parallel, you can set callback=None and handle the callbacks in the main thread by yourself, as shown in queryable.py.
+    # this auto spawns a separate thread to handle query callbacks, so that the callback can reply to queries in time without blocking the main thread. But the callbacks all share the same thread, so they are executed sequentially. 
    
     time.sleep(1000)
