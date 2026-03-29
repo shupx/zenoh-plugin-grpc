@@ -8,7 +8,8 @@ with zenoh_grpc.Session.connect() as session:
         timeout_ms=3_000)
     # The querier will receive the replies one by one or all at once depending on the consolidation mode set by the querier (AUTO(default,LATEST), NONE(receive one by one), MONOTONIC(monotonically consolidation), LATEST(only the latest)).
 
-    replies = querier.get(payload=b"query from python", encoding="text/plain") # unblocking, returns a ReplyStream
+    replies = querier.get(payload=b"hahahaha", encoding="text/plain") # unblocking, returns a ReplyStream
+    # the encoding is just a hint for the queryable to know how to parse the payload, it does not affect the actual payload sent to the queryable.
 
     for reply in replies:
         if reply.ok:
