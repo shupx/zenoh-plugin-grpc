@@ -4,7 +4,10 @@ mod queue;
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread,
 };
 
@@ -100,10 +103,10 @@ pub struct QueryStream {
     rx: DropOldestReceiver<pb::QueryableEvent>,
 }
 
-#[derive(Clone)]
 pub struct GrpcQuery {
     queryable: GrpcQueryable,
     inner: pb::Query,
+    finished: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +126,7 @@ enum QueryableCommand {
     Reply(QueryReplyArgs),
     ReplyErr(QueryReplyErrArgs),
     ReplyDelete(QueryReplyDeleteArgs),
+    Finish { query_id: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -691,6 +695,18 @@ impl GrpcQueryable {
                             .await;
                         rx.processed_one();
                     }
+                    QueryableCommand::Finish { query_id } => {
+                        let _ = queryable
+                            .session
+                            .queryable_client()
+                            .finish(pb::QueryFinishRequest {
+                                client_id: queryable.session.inner.client_id.clone(),
+                                handle: queryable.handle,
+                                query_id,
+                            })
+                            .await;
+                        rx.processed_one();
+                    }
                 }
             }
         });
@@ -712,48 +728,6 @@ impl GrpcQueryable {
         })
     }
 
-    pub fn recv(&self) -> Result<GrpcQuery, Error> {
-        self.ensure_pull_mode()?;
-        let event = self
-            .rx
-            .recv()
-            .map_err(|_| tonic::Status::unavailable("queryable event queue closed"))?;
-        self.query_from_event(event)
-    }
-
-    pub fn try_recv(&self) -> Result<Option<GrpcQuery>, Error> {
-        self.ensure_pull_mode()?;
-        match self.rx.try_recv() {
-            Ok(event) => Ok(Some(self.query_from_event(event)?)),
-            Err(flume::TryRecvError::Empty) => Ok(None),
-            Err(flume::TryRecvError::Disconnected) => {
-                Err(tonic::Status::unavailable("queryable event queue closed").into())
-            }
-        }
-    }
-
-    pub fn dropped_count(&self) -> u64 {
-        self.rx.dropped_count()
-    }
-
-    pub async fn reply(&self, req: QueryReplyArgs) -> Result<(), Error> {
-        self.write_tx
-            .push(QueryableCommand::Reply(req))
-            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
-    }
-
-    pub async fn reply_err(&self, req: QueryReplyErrArgs) -> Result<(), Error> {
-        self.write_tx
-            .push(QueryableCommand::ReplyErr(req))
-            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
-    }
-
-    pub async fn reply_delete(&self, req: QueryReplyDeleteArgs) -> Result<(), Error> {
-        self.write_tx
-            .push(QueryableCommand::ReplyDelete(req))
-            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
-    }
-
     pub async fn undeclare(&self) -> Result<(), Error> {
         self.write_tx.wait_empty().await;
         self.session
@@ -773,6 +747,7 @@ impl GrpcQueryable {
         Ok(GrpcQuery {
             queryable: self.clone(),
             inner,
+            finished: Arc::new(AtomicBool::new(false)),
         })
     }
 }
@@ -888,6 +863,17 @@ impl QueryStream {
 }
 
 impl GrpcQuery {
+    fn enqueue_command(&self, command: QueryableCommand) -> Result<(), Error> {
+        self.queryable
+            .write_tx
+            .push(command)
+            .map_err(|_| tonic::Status::unavailable("queryable send queue closed").into())
+    }
+
+    fn mark_finished(&self) -> bool {
+        !self.finished.swap(true, Ordering::AcqRel)
+    }
+
     pub fn query_id(&self) -> u64 {
         self.inner.query_id
     }
@@ -924,16 +910,14 @@ impl GrpcQuery {
         attachment: impl Into<Vec<u8>>,
         timestamp: impl Into<String>,
     ) -> Result<(), Error> {
-        self.queryable
-            .reply(QueryReplyArgs {
-                query_id: self.inner.query_id,
-                key_expr: key_expr.into(),
-                payload: payload.into(),
-                encoding: encoding.into(),
-                attachment: attachment.into(),
-                timestamp: timestamp.into(),
-            })
-            .await
+        self.enqueue_command(QueryableCommand::Reply(QueryReplyArgs {
+            query_id: self.inner.query_id,
+            key_expr: key_expr.into(),
+            payload: payload.into(),
+            encoding: encoding.into(),
+            attachment: attachment.into(),
+            timestamp: timestamp.into(),
+        }))
     }
 
     pub async fn reply_err(
@@ -941,13 +925,11 @@ impl GrpcQuery {
         payload: impl Into<Vec<u8>>,
         encoding: impl Into<String>,
     ) -> Result<(), Error> {
-        self.queryable
-            .reply_err(QueryReplyErrArgs {
-                query_id: self.inner.query_id,
-                payload: payload.into(),
-                encoding: encoding.into(),
-            })
-            .await
+        self.enqueue_command(QueryableCommand::ReplyErr(QueryReplyErrArgs {
+            query_id: self.inner.query_id,
+            payload: payload.into(),
+            encoding: encoding.into(),
+        }))
     }
 
     pub async fn reply_delete(
@@ -956,13 +938,30 @@ impl GrpcQuery {
         attachment: impl Into<Vec<u8>>,
         timestamp: impl Into<String>,
     ) -> Result<(), Error> {
-        self.queryable
-            .reply_delete(QueryReplyDeleteArgs {
+        self.enqueue_command(QueryableCommand::ReplyDelete(QueryReplyDeleteArgs {
+            query_id: self.inner.query_id,
+            key_expr: key_expr.into(),
+            attachment: attachment.into(),
+            timestamp: timestamp.into(),
+        }))
+    }
+
+    pub async fn finish(self) -> Result<(), Error> {
+        if self.mark_finished() {
+            self.enqueue_command(QueryableCommand::Finish {
                 query_id: self.inner.query_id,
-                key_expr: key_expr.into(),
-                attachment: attachment.into(),
-                timestamp: timestamp.into(),
-            })
-            .await
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for GrpcQuery {
+    fn drop(&mut self) {
+        if self.mark_finished() {
+            let _ = self.enqueue_command(QueryableCommand::Finish {
+                query_id: self.inner.query_id,
+            });
+        }
     }
 }

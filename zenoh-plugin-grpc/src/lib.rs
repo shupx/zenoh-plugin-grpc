@@ -773,6 +773,25 @@ impl QueryableService for GrpcServer {
         Ok(Response::new(pb::Empty {}))
     }
 
+    async fn finish(
+        &self,
+        request: Request<pb::QueryFinishRequest>,
+    ) -> Result<Response<pb::Empty>, Status> {
+        let req = request.into_inner();
+        let mut inflight = self.state.inflight_queries.lock().await;
+        let query = inflight
+            .get(&req.query_id)
+            .ok_or_else(|| Status::not_found("query not found"))?;
+        ensure_owner(&req.client_id, &query.owner)?;
+        if query.handle != req.handle {
+            return Err(Status::permission_denied(
+                "query does not belong to the queryable handle",
+            ));
+        }
+        inflight.remove(&req.query_id);
+        Ok(Response::new(pb::Empty {}))
+    }
+
     async fn undeclare(
         &self,
         request: Request<pb::UndeclareRequest>,
@@ -959,8 +978,7 @@ mod tests {
     };
     use zenoh_grpc_client_rs::{
         ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
-        DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs,
-        SessionGetArgs,
+        DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, SessionGetArgs,
     };
 
     struct TestHarness {
@@ -1094,23 +1112,24 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(
+                let query = timeout(
                     Duration::from_secs(5),
                     queryable.receiver().unwrap().recv_async(),
                 )
                 .await
                 .unwrap()
                 .unwrap();
-                let query = event.query.unwrap();
-                queryable
-                    .reply(QueryReplyArgs {
-                        query_id: query.query_id,
-                        key_expr: "demo/query/value".into(),
-                        payload: b"world".to_vec(),
-                        ..Default::default()
-                    })
+                query
+                    .reply(
+                        "demo/query/value",
+                        b"world".to_vec(),
+                        String::new(),
+                        Vec::new(),
+                        String::new(),
+                    )
                     .await
                     .unwrap();
+                query.finish().await.unwrap();
                 queryable.undeclare().await.unwrap();
             })
         };
@@ -1167,23 +1186,24 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(
+                let query = timeout(
                     Duration::from_secs(5),
                     queryable.receiver().unwrap().recv_async(),
                 )
                 .await
                 .unwrap()
                 .unwrap();
-                let query = event.query.unwrap();
-                queryable
-                    .reply(QueryReplyArgs {
-                        query_id: query.query_id,
-                        key_expr: "demo/querier/value".into(),
-                        payload: b"querier".to_vec(),
-                        ..Default::default()
-                    })
+                query
+                    .reply(
+                        "demo/querier/value",
+                        b"querier".to_vec(),
+                        String::new(),
+                        Vec::new(),
+                        String::new(),
+                    )
                     .await
                     .unwrap();
+                query.finish().await.unwrap();
                 queryable.undeclare().await.unwrap();
             })
         };
@@ -1207,6 +1227,110 @@ mod tests {
         assert_eq!(sample.payload, b"querier".to_vec());
 
         querier.undeclare().await.unwrap();
+        queryable_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn query_finish_closes_reply_stream_without_replies() {
+        let harness = start_harness().await;
+        let queryable_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let getter_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+
+        let queryable = queryable_client
+            .declare_queryable(
+                DeclareQueryableArgs {
+                    key_expr: "demo/query/finish".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let queryable_task = {
+            let queryable = queryable;
+            tokio::spawn(async move {
+                let query = timeout(
+                    Duration::from_secs(5),
+                    queryable.receiver().unwrap().recv_async(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                query.finish().await.unwrap();
+                queryable.undeclare().await.unwrap();
+            })
+        };
+
+        let replies = getter_client
+            .get(SessionGetArgs {
+                selector: "demo/query/finish".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let err = timeout(Duration::from_secs(5), replies.recv_async())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("reply stream closed"));
+
+        queryable_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn query_drop_fallback_closes_reply_stream() {
+        let harness = start_harness().await;
+        let queryable_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let getter_client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+
+        let queryable = queryable_client
+            .declare_queryable(
+                DeclareQueryableArgs {
+                    key_expr: "demo/query/drop".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let queryable_task = {
+            let queryable = queryable;
+            tokio::spawn(async move {
+                let _query = timeout(
+                    Duration::from_secs(5),
+                    queryable.receiver().unwrap().recv_async(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                sleep(Duration::from_millis(100)).await;
+                queryable.undeclare().await.unwrap();
+            })
+        };
+
+        let replies = getter_client
+            .get(SessionGetArgs {
+                selector: "demo/query/drop".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let err = timeout(Duration::from_secs(5), replies.recv_async())
+            .await
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("reply stream closed"));
+
         queryable_task.await.unwrap();
     }
 }

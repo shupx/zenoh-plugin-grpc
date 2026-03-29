@@ -29,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     String::new(),
                 )
                 .await;
+            let _ = query.finish().await;
         }
         Ok::<(), zenoh_grpc_client_rs::Error>(())
     });

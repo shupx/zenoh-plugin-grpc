@@ -1,8 +1,13 @@
 use std::sync::Arc;
 
-use pyo3::{exceptions::PyStopIteration, prelude::*};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyStopIteration},
+    prelude::*,
+};
 use tokio::runtime::Runtime;
-use zenoh_grpc_client_rs::{GrpcQuery as RsGrpcQuery, ReplyStream as RsReplyStream};
+use zenoh_grpc_client_rs::{
+    GrpcQuery as RsGrpcQuery, QueryStream as RsQueryStream, ReplyStream as RsReplyStream,
+};
 use zenoh_grpc_proto::v1 as pb;
 
 use crate::common::to_py_err;
@@ -32,10 +37,16 @@ pub(crate) struct Reply {
 }
 
 #[pyclass]
-#[derive(Clone)]
 pub(crate) struct Query {
     rt: Arc<Runtime>,
-    inner: RsGrpcQuery,
+    inner: Option<RsGrpcQuery>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+pub(crate) struct QueryStream {
+    rt: Arc<Runtime>,
+    inner: RsQueryStream,
 }
 
 #[pyclass]
@@ -64,7 +75,36 @@ impl Reply {
 
 impl Query {
     pub(crate) fn from_inner(rt: Arc<Runtime>, inner: RsGrpcQuery) -> Self {
+        Self {
+            rt,
+            inner: Some(inner),
+        }
+    }
+
+    fn inner(&self) -> PyResult<&RsGrpcQuery> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("query already dropped"))
+    }
+
+    fn take_inner(&mut self) -> PyResult<RsGrpcQuery> {
+        self.inner
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err("query already dropped"))
+    }
+}
+
+impl QueryStream {
+    pub(crate) fn from_inner(rt: Arc<Runtime>, inner: RsQueryStream) -> Self {
         Self { rt, inner }
+    }
+
+    fn next_query(&self) -> PyResult<Query> {
+        match self.inner.recv() {
+            Ok(inner) => Ok(Query::from_inner(self.rt.clone(), inner)),
+            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
+            Err(err) => Err(to_py_err(err)),
+        }
     }
 }
 
@@ -218,39 +258,52 @@ impl Reply {
 
 #[pymethods]
 impl Query {
-    #[getter]
-    fn query_id(&self) -> u64 {
-        self.inner.query_id()
+    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __exit__(
+        mut slf: PyRefMut<'_, Self>,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc: Option<&Bound<'_, PyAny>>,
+        _tb: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        Query::drop(&mut slf)
     }
 
     #[getter]
-    fn selector(&self) -> String {
-        self.inner.selector().to_string()
+    fn query_id(&self) -> PyResult<u64> {
+        Ok(self.inner()?.query_id())
     }
 
     #[getter]
-    fn key_expr(&self) -> String {
-        self.inner.key_expr().to_string()
+    fn selector(&self) -> PyResult<String> {
+        Ok(self.inner()?.selector().to_string())
     }
 
     #[getter]
-    fn parameters(&self) -> String {
-        self.inner.parameters().to_string()
+    fn key_expr(&self) -> PyResult<String> {
+        Ok(self.inner()?.key_expr().to_string())
     }
 
     #[getter]
-    fn payload(&self) -> Vec<u8> {
-        self.inner.payload().to_vec()
+    fn parameters(&self) -> PyResult<String> {
+        Ok(self.inner()?.parameters().to_string())
     }
 
     #[getter]
-    fn encoding(&self) -> String {
-        self.inner.encoding().to_string()
+    fn payload(&self) -> PyResult<Vec<u8>> {
+        Ok(self.inner()?.payload().to_vec())
     }
 
     #[getter]
-    fn attachment(&self) -> Vec<u8> {
-        self.inner.attachment().to_vec()
+    fn encoding(&self) -> PyResult<String> {
+        Ok(self.inner()?.encoding().to_string())
+    }
+
+    #[getter]
+    fn attachment(&self) -> PyResult<Vec<u8>> {
+        Ok(self.inner()?.attachment().to_vec())
     }
 
     #[pyo3(signature = (key_expr, payload, encoding=None, attachment=None, timestamp=None))]
@@ -263,7 +316,7 @@ impl Query {
         timestamp: Option<String>,
     ) -> PyResult<()> {
         self.rt
-            .block_on(self.inner.reply(
+            .block_on(self.inner()?.reply(
                 key_expr,
                 payload,
                 encoding.unwrap_or_default(),
@@ -276,7 +329,10 @@ impl Query {
     #[pyo3(signature = (payload, encoding=None))]
     fn reply_err(&self, payload: Vec<u8>, encoding: Option<String>) -> PyResult<()> {
         self.rt
-            .block_on(self.inner.reply_err(payload, encoding.unwrap_or_default()))
+            .block_on(
+                self.inner()?
+                    .reply_err(payload, encoding.unwrap_or_default()),
+            )
             .map_err(to_py_err)
     }
 
@@ -288,12 +344,50 @@ impl Query {
         timestamp: Option<String>,
     ) -> PyResult<()> {
         self.rt
-            .block_on(self.inner.reply_delete(
+            .block_on(self.inner()?.reply_delete(
                 key_expr,
                 attachment.unwrap_or_default(),
                 timestamp.unwrap_or_default(),
             ))
             .map_err(to_py_err)
+    }
+
+    fn drop(&mut self) -> PyResult<()> {
+        let inner = self.take_inner()?;
+        self.rt.block_on(inner.finish()).map_err(to_py_err)
+    }
+}
+
+#[pymethods]
+impl QueryStream {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self) -> PyResult<Query> {
+        self.next_query()
+    }
+
+    fn recv(&self) -> PyResult<Query> {
+        self.inner
+            .recv()
+            .map(|inner| Query::from_inner(self.rt.clone(), inner))
+            .map_err(to_py_err)
+    }
+
+    fn try_recv(&self) -> PyResult<Option<Query>> {
+        self.inner
+            .try_recv()
+            .map(|query| query.map(|inner| Query::from_inner(self.rt.clone(), inner)))
+            .map_err(to_py_err)
+    }
+
+    fn dropped_count(&self) -> u64 {
+        self.inner.dropped_count()
+    }
+
+    fn is_closed(&self) -> bool {
+        self.inner.is_closed()
     }
 }
 
@@ -333,6 +427,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ReplyError>()?;
     module.add_class::<Reply>()?;
     module.add_class::<Query>()?;
+    module.add_class::<QueryStream>()?;
     module.add_class::<ReplyStream>()?;
     Ok(())
 }

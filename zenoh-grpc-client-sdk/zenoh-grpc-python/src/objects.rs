@@ -8,15 +8,14 @@ use zenoh_grpc_client_rs::{
     DeclareSubscriberArgs as RsDeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQueryable,
     GrpcSession, GrpcSubscriber, PublisherDeleteArgs as RsPublisherDeleteArgs,
     PublisherPutArgs as RsPublisherPutArgs, QuerierGetArgs as RsQuerierGetArgs,
-    QueryReplyArgs as RsQueryReplyArgs, QueryReplyDeleteArgs as RsQueryReplyDeleteArgs,
-    QueryReplyErrArgs as RsQueryReplyErrArgs, QueryableCallback as RsQueryableCallback,
-    SessionDeleteArgs as RsSessionDeleteArgs, SessionGetArgs as RsSessionGetArgs,
-    SessionPutArgs as RsSessionPutArgs, SubscriberCallback as RsSubscriberCallback,
+    QueryableCallback as RsQueryableCallback, SessionDeleteArgs as RsSessionDeleteArgs,
+    SessionGetArgs as RsSessionGetArgs, SessionPutArgs as RsSessionPutArgs,
+    SubscriberCallback as RsSubscriberCallback,
 };
 
 use crate::{
     common::{parse_connect_addr, runtime, to_py_err},
-    events::{Query, ReplyStream, SubscriberEvent},
+    events::{Query, QueryStream, ReplyStream, SubscriberEvent},
 };
 
 #[pyclass]
@@ -390,77 +389,13 @@ impl Queryable {
         self.undeclare()
     }
 
-    fn recv(&self) -> PyResult<Query> {
-        self.inner
-            .recv()
-            .map(|inner| Query::from_inner(self.rt.clone(), inner))
-            .map_err(to_py_err)
-    }
-
-    fn try_recv(&self) -> PyResult<Option<Query>> {
-        self.inner
-            .try_recv()
-            .map(|query| query.map(|inner| Query::from_inner(self.rt.clone(), inner)))
-            .map_err(to_py_err)
-    }
-
-    #[pyo3(signature = (query_id, key_expr, payload, encoding=None, attachment=None, timestamp=None))]
-    fn reply(
-        &self,
-        query_id: u64,
-        key_expr: String,
-        payload: Vec<u8>,
-        encoding: Option<String>,
-        attachment: Option<Vec<u8>>,
-        timestamp: Option<String>,
-    ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.reply(RsQueryReplyArgs {
-                query_id,
-                key_expr,
-                payload,
-                encoding: encoding.unwrap_or_default(),
-                attachment: attachment.unwrap_or_default(),
-                timestamp: timestamp.unwrap_or_default(),
-            }))
-            .map_err(to_py_err)
-    }
-
-    #[pyo3(signature = (query_id, payload, encoding=None))]
-    fn reply_err(&self, query_id: u64, payload: Vec<u8>, encoding: Option<String>) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.reply_err(RsQueryReplyErrArgs {
-                query_id,
-                payload,
-                encoding: encoding.unwrap_or_default(),
-            }))
-            .map_err(to_py_err)
-    }
-
-    #[pyo3(signature = (query_id, key_expr, attachment=None, timestamp=None))]
-    fn reply_delete(
-        &self,
-        query_id: u64,
-        key_expr: String,
-        attachment: Option<Vec<u8>>,
-        timestamp: Option<String>,
-    ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.reply_delete(RsQueryReplyDeleteArgs {
-                query_id,
-                key_expr,
-                attachment: attachment.unwrap_or_default(),
-                timestamp: timestamp.unwrap_or_default(),
-            }))
-            .map_err(to_py_err)
+    fn receiver(&self) -> PyResult<QueryStream> {
+        let receiver = self.inner.receiver().map_err(to_py_err)?;
+        Ok(QueryStream::from_inner(self.rt.clone(), receiver))
     }
 
     fn undeclare(&self) -> PyResult<()> {
         self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
-    }
-
-    fn dropped_count(&self) -> u64 {
-        self.inner.dropped_count()
     }
 
     fn send_dropped_count(&self) -> u64 {

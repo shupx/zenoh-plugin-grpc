@@ -249,6 +249,12 @@ message QueryReplyDeleteRequest {
   string timestamp = 6;
 }
 
+message QueryFinishRequest {
+  string client_id = 1;
+  uint64 handle = 2;
+  uint64 query_id = 3;
+}
+
 message QuerierGetRequest {
   string client_id = 1;
   uint64 handle = 2;
@@ -285,6 +291,7 @@ service QueryableService {
   rpc Reply(QueryReplyRequest) returns (Empty);
   rpc ReplyErr(QueryReplyErrRequest) returns (Empty);
   rpc ReplyDelete(QueryReplyDeleteRequest) returns (Empty);
+  rpc Finish(QueryFinishRequest) returns (Empty);
   rpc Undeclare(UndeclareRequest) returns (Empty);
 }
 
