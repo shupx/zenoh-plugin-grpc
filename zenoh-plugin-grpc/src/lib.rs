@@ -256,7 +256,9 @@ impl GrpcServer {
 
 fn ensure_owner(client_id: &str, owner: &str) -> Result<(), Status> {
     if client_id != owner {
-        Err(Status::permission_denied("handle belongs to another client"))
+        Err(Status::permission_denied(
+            "handle belongs to another client",
+        ))
     } else {
         Ok(())
     }
@@ -334,7 +336,10 @@ fn encode_sample(sample: &Sample) -> pb::Sample {
             .attachment()
             .map(|a| a.to_bytes().into_owned())
             .unwrap_or_default(),
-        timestamp: sample.timestamp().map(|ts| ts.to_string()).unwrap_or_default(),
+        timestamp: sample
+            .timestamp()
+            .map(|ts| ts.to_string())
+            .unwrap_or_default(),
         source_info: None,
     }
 }
@@ -417,7 +422,9 @@ impl SessionService for GrpcServer {
             builder = builder.timeout(Duration::from_millis(req.timeout_ms));
         }
         if !req.payload.is_empty() {
-            builder = builder.payload(req.payload).encoding(Encoding::from(req.encoding));
+            builder = builder
+                .payload(req.payload)
+                .encoding(Encoding::from(req.encoding));
         }
         if let Some(attachment) = opt_attachment(req.attachment) {
             builder = builder.attachment(attachment);
@@ -435,7 +442,9 @@ impl SessionService for GrpcServer {
         &self,
         request: Request<pb::CleanupClientRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
-        self.state.cleanup_client(&request.into_inner().client_id).await;
+        self.state
+            .cleanup_client(&request.into_inner().client_id)
+            .await;
         Ok(Response::new(pb::Empty {}))
     }
 }
@@ -576,8 +585,8 @@ impl SubscriberService for GrpcServer {
             .get(&req.handle)
             .ok_or_else(|| Status::not_found("subscriber handle not found"))?;
         ensure_owner(&req.client_id, &entry.owner)?;
-        let stream = BroadcastStream::new(entry.events.subscribe())
-            .filter_map(|item| item.ok().map(Ok));
+        let stream =
+            BroadcastStream::new(entry.events.subscribe()).filter_map(|item| item.ok().map(Ok));
         Ok(Response::new(Box::pin(stream)))
     }
 
@@ -594,7 +603,11 @@ impl SubscriberService for GrpcServer {
             .remove(&req.handle)
             .ok_or_else(|| Status::not_found("subscriber handle not found"))?;
         ensure_owner(&req.client_id, &entry.owner)?;
-        entry.subscriber.undeclare().await.map_err(internal_status)?;
+        entry
+            .subscriber
+            .undeclare()
+            .await
+            .map_err(internal_status)?;
         Ok(Response::new(pb::Empty {}))
     }
 }
@@ -683,8 +696,8 @@ impl QueryableService for GrpcServer {
             .get(&req.handle)
             .ok_or_else(|| Status::not_found("queryable handle not found"))?;
         ensure_owner(&req.client_id, &entry.owner)?;
-        let stream = BroadcastStream::new(entry.events.subscribe())
-            .filter_map(|item| item.ok().map(Ok));
+        let stream =
+            BroadcastStream::new(entry.events.subscribe()).filter_map(|item| item.ok().map(Ok));
         Ok(Response::new(Box::pin(stream)))
     }
 
@@ -699,7 +712,9 @@ impl QueryableService for GrpcServer {
             .ok_or_else(|| Status::not_found("query not found"))?;
         ensure_owner(&req.client_id, &query.owner)?;
         if query.handle != req.handle {
-            return Err(Status::permission_denied("query does not belong to the queryable handle"));
+            return Err(Status::permission_denied(
+                "query does not belong to the queryable handle",
+            ));
         }
         let mut builder = query.query.reply(req.key_expr, req.payload);
         if !req.encoding.is_empty() {
@@ -723,7 +738,9 @@ impl QueryableService for GrpcServer {
             .ok_or_else(|| Status::not_found("query not found"))?;
         ensure_owner(&req.client_id, &query.owner)?;
         if query.handle != req.handle {
-            return Err(Status::permission_denied("query does not belong to the queryable handle"));
+            return Err(Status::permission_denied(
+                "query does not belong to the queryable handle",
+            ));
         }
         let mut builder = query.query.reply_err(req.payload);
         if !req.encoding.is_empty() {
@@ -744,7 +761,9 @@ impl QueryableService for GrpcServer {
             .ok_or_else(|| Status::not_found("query not found"))?;
         ensure_owner(&req.client_id, &query.owner)?;
         if query.handle != req.handle {
-            return Err(Status::permission_denied("query does not belong to the queryable handle"));
+            return Err(Status::permission_denied(
+                "query does not belong to the queryable handle",
+            ));
         }
         let mut builder = query.query.reply_del(req.key_expr);
         if let Some(attachment) = opt_attachment(req.attachment) {
@@ -791,8 +810,7 @@ impl QuerierService for GrpcServer {
             .declare_querier(req.key_expr)
             .target(map_query_target(req.target))
             .consolidation(map_consolidation(req.consolidation))
-            .allowed_destination(map_locality(req.allowed_destination))
-            ;
+            .allowed_destination(map_locality(req.allowed_destination));
         let querier = if req.timeout_ms != 0 {
             querier.timeout(Duration::from_millis(req.timeout_ms))
         } else {
@@ -825,7 +843,9 @@ impl QuerierService for GrpcServer {
         let mut builder = entry.querier.get();
         builder = builder.parameters(req.parameters);
         if !req.payload.is_empty() {
-            builder = builder.payload(req.payload).encoding(Encoding::from(req.encoding));
+            builder = builder
+                .payload(req.payload)
+                .encoding(Encoding::from(req.encoding));
         }
         if let Some(attachment) = opt_attachment(req.attachment) {
             builder = builder.attachment(attachment);
@@ -1010,10 +1030,13 @@ mod tests {
             .unwrap();
 
         let subscriber = sub_client
-            .declare_subscriber(DeclareSubscriberArgs {
-                key_expr: "demo/e2e/**".into(),
-                ..Default::default()
-            }, None)
+            .declare_subscriber(
+                DeclareSubscriberArgs {
+                    key_expr: "demo/e2e/**".into(),
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .unwrap();
         let publisher = pub_client
@@ -1032,10 +1055,13 @@ mod tests {
             .await
             .unwrap();
 
-        let event = timeout(Duration::from_secs(5), subscriber.receiver().unwrap().recv_async())
-            .await
-            .unwrap()
-            .unwrap();
+        let event = timeout(
+            Duration::from_secs(5),
+            subscriber.receiver().unwrap().recv_async(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         let sample = event.sample.unwrap();
         assert_eq!(sample.key_expr, "demo/e2e/value");
         assert_eq!(sample.payload, b"hello".to_vec());
@@ -1055,20 +1081,26 @@ mod tests {
             .unwrap();
 
         let queryable = queryable_client
-            .declare_queryable(DeclareQueryableArgs {
-                key_expr: "demo/query/**".into(),
-                ..Default::default()
-            }, None)
+            .declare_queryable(
+                DeclareQueryableArgs {
+                    key_expr: "demo/query/**".into(),
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .unwrap();
 
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(Duration::from_secs(5), queryable.receiver().unwrap().recv_async())
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let event = timeout(
+                    Duration::from_secs(5),
+                    queryable.receiver().unwrap().recv_async(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
                 let query = event.query.unwrap();
                 queryable
                     .reply(QueryReplyArgs {
@@ -1115,10 +1147,13 @@ mod tests {
             .unwrap();
 
         let queryable = queryable_client
-            .declare_queryable(DeclareQueryableArgs {
-                key_expr: "demo/querier/**".into(),
-                ..Default::default()
-            }, None)
+            .declare_queryable(
+                DeclareQueryableArgs {
+                    key_expr: "demo/querier/**".into(),
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .unwrap();
         let querier = querier_client
@@ -1132,10 +1167,13 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(Duration::from_secs(5), queryable.receiver().unwrap().recv_async())
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let event = timeout(
+                    Duration::from_secs(5),
+                    queryable.receiver().unwrap().recv_async(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
                 let query = event.query.unwrap();
                 queryable
                     .reply(QueryReplyArgs {

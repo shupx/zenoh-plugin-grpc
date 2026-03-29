@@ -15,8 +15,8 @@ use zenoh_grpc_client_rs::{
 };
 
 use crate::{
-    common::{collect_replies, parse_connect_addr, runtime, to_py_err},
-    events::{QueryableEvent, SubscriberEvent},
+    common::{parse_connect_addr, runtime, to_py_err},
+    events::{Query, ReplyStream, SubscriberEvent},
 };
 
 #[pyclass]
@@ -145,7 +145,7 @@ impl Session {
         encoding: Option<String>,
         attachment: Option<Vec<u8>>,
         allowed_destination: Option<i32>,
-    ) -> PyResult<Vec<String>> {
+    ) -> PyResult<ReplyStream> {
         let replies = self
             .rt
             .block_on(self.inner.get(RsSessionGetArgs {
@@ -159,7 +159,7 @@ impl Session {
                 allowed_destination: allowed_destination.unwrap_or_default(),
             }))
             .map_err(to_py_err)?;
-        Ok(collect_replies(replies))
+        Ok(ReplyStream::from_inner(replies))
     }
 
     #[pyo3(signature = (key_expr, encoding=None, congestion_control=None, priority=None, express=false, reliability=None, allowed_destination=None))]
@@ -231,10 +231,12 @@ impl Session {
         complete: bool,
         allowed_origin: Option<i32>,
     ) -> PyResult<Queryable> {
+        let rt = self.rt.clone();
         let callback: Option<RsQueryableCallback> = callback.map(|callback| {
+            let rt = rt.clone();
             Arc::new(move |inner| {
                 Python::with_gil(|py| {
-                    if let Err(err) = callback.call1(py, (QueryableEvent { inner },)) {
+                    if let Err(err) = callback.call1(py, (Query::from_inner(rt.clone(), inner),)) {
                         err.print(py);
                     }
                 });
@@ -388,10 +390,17 @@ impl Queryable {
         self.undeclare()
     }
 
-    fn recv(&self) -> PyResult<QueryableEvent> {
+    fn recv(&self) -> PyResult<Query> {
         self.inner
             .recv()
-            .map(|inner| QueryableEvent { inner })
+            .map(|inner| Query::from_inner(self.rt.clone(), inner))
+            .map_err(to_py_err)
+    }
+
+    fn try_recv(&self) -> PyResult<Option<Query>> {
+        self.inner
+            .try_recv()
+            .map(|query| query.map(|inner| Query::from_inner(self.rt.clone(), inner)))
             .map_err(to_py_err)
     }
 
@@ -481,7 +490,7 @@ impl Querier {
         payload: Option<Vec<u8>>,
         encoding: Option<String>,
         attachment: Option<Vec<u8>>,
-    ) -> PyResult<Vec<String>> {
+    ) -> PyResult<ReplyStream> {
         let replies = self
             .rt
             .block_on(self.inner.get(RsQuerierGetArgs {
@@ -491,7 +500,7 @@ impl Querier {
                 attachment: attachment.unwrap_or_default(),
             }))
             .map_err(to_py_err)?;
-        Ok(collect_replies(replies))
+        Ok(ReplyStream::from_inner(replies))
     }
 
     fn undeclare(&self) -> PyResult<()> {

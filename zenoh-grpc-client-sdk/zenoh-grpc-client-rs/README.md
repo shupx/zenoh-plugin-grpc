@@ -69,12 +69,14 @@ publisher
 
 println!("publisher send drops: {}", publisher.send_dropped_count());
 
-let _replies = session
+let replies = session
     .get(SessionGetArgs {
         selector: "demo/example/value".into(),
         ..Default::default()
     })
     .await?;
+
+println!("{:?}", replies.recv_async().await?);
 # Ok(())
 # }
 ```

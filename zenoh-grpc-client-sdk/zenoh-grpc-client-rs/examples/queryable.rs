@@ -1,9 +1,7 @@
 use std::time::Duration;
 
 use tokio::time::timeout;
-use zenoh_grpc_client_rs::{
-    ConnectAddr, DeclareQueryableArgs, GrpcSession, QueryReplyArgs, SessionGetArgs,
-};
+use zenoh_grpc_client_rs::{ConnectAddr, DeclareQueryableArgs, GrpcSession, SessionGetArgs};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,24 +9,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let getter_session = GrpcSession::connect(ConnectAddr::Tcp("127.0.0.1:7335".into())).await?;
 
     let queryable = queryable_session
-        .declare_queryable(DeclareQueryableArgs {
-            key_expr: "demo/query/**".into(),
-            ..Default::default()
-        }, None)
+        .declare_queryable(
+            DeclareQueryableArgs {
+                key_expr: "demo/query/**".into(),
+                ..Default::default()
+            },
+            None,
+        )
         .await?;
 
     tokio::spawn(async move {
-        if let Ok(event) = queryable.receiver()?.recv_async().await {
-            if let Some(query) = event.query {
-                let _ = queryable
-                    .reply(QueryReplyArgs {
-                        query_id: query.query_id,
-                        key_expr: "demo/query/value".into(),
-                        payload: b"reply from rust".to_vec(),
-                        ..Default::default()
-                    })
-                    .await;
-            }
+        if let Ok(query) = queryable.receiver()?.recv_async().await {
+            let _ = query
+                .reply(
+                    "demo/query/value",
+                    b"reply from rust".to_vec(),
+                    "text/plain",
+                    Vec::new(),
+                    String::new(),
+                )
+                .await;
         }
         Ok::<(), zenoh_grpc_client_rs::Error>(())
     });

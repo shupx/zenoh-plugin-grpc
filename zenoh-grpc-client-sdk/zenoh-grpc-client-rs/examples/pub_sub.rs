@@ -11,10 +11,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pub_session = GrpcSession::connect(ConnectAddr::Tcp("127.0.0.1:7335".into())).await?;
 
     let subscriber = sub_session
-        .declare_subscriber(DeclareSubscriberArgs {
-            key_expr: "demo/example/**".into(),
-            ..Default::default()
-        }, None)
+        .declare_subscriber(
+            DeclareSubscriberArgs {
+                key_expr: "demo/example/**".into(),
+                ..Default::default()
+            },
+            None,
+        )
         .await?;
     let publisher = pub_session
         .declare_publisher(DeclarePublisherArgs {
@@ -30,11 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let event = timeout(
-        Duration::from_secs(5),
-        subscriber.receiver()?.recv_async(),
-    )
-    .await??;
+    let event = timeout(Duration::from_secs(5), subscriber.receiver()?.recv_async()).await??;
     if let Some(sample) = event.sample {
         println!(
             "received {} => {}",

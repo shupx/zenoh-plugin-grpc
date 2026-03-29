@@ -3,16 +3,11 @@ import time
 
 
 with zenoh_grpc.Session.connect() as session:
-    def on_query(event):
-        print("\nreceived query:", event.query_id, event.selector, event.key_expr, event.parameters, event.payload, event.encoding, event.attachment)
-        queryable.reply(
-            event.query_id,
-            "demo/query/value",
-            b"reply from python callback",
-            encoding="text/plain",
-        )
-        print("replied to query:", event.query_id)
+    def on_query(query):
+        print("\nreceived query:", query.query_id, query.selector, query.key_expr, query.parameters, query.payload, query.encoding, query.attachment)
+        query.reply(query.key_expr, b"this is a reply from queryable callback", encoding="text/plain")
+        print("replied to query:", query.query_id)
 
-    queryable = session.declare_queryable("demo/query/**", on_query, complete=False, allowed_origin=zenoh_grpc.Locality.ANY)
+    queryable = session.declare_queryable("demo/query/**", callback=on_query, complete=True, allowed_origin=zenoh_grpc.Locality.ANY) # this auto spawns a separate thread to handle query callbacks, so that the callback can reply to queries in time without blocking the main thread
    
     time.sleep(1000)

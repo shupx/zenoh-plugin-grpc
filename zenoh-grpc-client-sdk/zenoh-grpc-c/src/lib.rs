@@ -9,15 +9,16 @@ use std::{
 use tokio::runtime::Runtime;
 use zenoh_grpc_client_rs::{
     ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
-    DeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQueryable, GrpcSession,
-    GrpcSubscriber, PublisherDeleteArgs, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs,
-    QueryReplyDeleteArgs, QueryReplyErrArgs, SessionDeleteArgs, SessionPutArgs,
+    DeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQueryable, GrpcSession, GrpcSubscriber,
+    PublisherDeleteArgs, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs, QueryReplyDeleteArgs,
+    QueryReplyErrArgs, SessionDeleteArgs, SessionPutArgs,
 };
 use zenoh_grpc_proto::v1 as pb;
 
 fn runtime() -> Arc<Runtime> {
     static RT: std::sync::OnceLock<Arc<Runtime>> = std::sync::OnceLock::new();
-    RT.get_or_init(|| Arc::new(Runtime::new().expect("tokio runtime"))).clone()
+    RT.get_or_init(|| Arc::new(Runtime::new().expect("tokio runtime")))
+        .clone()
 }
 
 #[repr(C)]
@@ -86,7 +87,9 @@ unsafe fn take_session<'a>(session: *mut zgrpc_session_t) -> Option<&'a mut zgrp
     session.as_mut()
 }
 
-unsafe fn take_publisher<'a>(publisher: *mut zgrpc_publisher_t) -> Option<&'a mut zgrpc_publisher_t> {
+unsafe fn take_publisher<'a>(
+    publisher: *mut zgrpc_publisher_t,
+) -> Option<&'a mut zgrpc_publisher_t> {
     publisher.as_mut()
 }
 
@@ -96,7 +99,9 @@ unsafe fn take_subscriber<'a>(
     subscriber.as_mut()
 }
 
-unsafe fn take_queryable<'a>(queryable: *mut zgrpc_queryable_t) -> Option<&'a mut zgrpc_queryable_t> {
+unsafe fn take_queryable<'a>(
+    queryable: *mut zgrpc_queryable_t,
+) -> Option<&'a mut zgrpc_queryable_t> {
     queryable.as_mut()
 }
 
@@ -123,7 +128,9 @@ pub unsafe extern "C" fn zgrpc_open_tcp(addr: *const c_char) -> *mut zgrpc_sessi
 #[no_mangle]
 pub unsafe extern "C" fn zgrpc_open_unix(path: *const c_char) -> *mut zgrpc_session_t {
     let rt = runtime();
-    match rt.block_on(GrpcSession::connect(ConnectAddr::Unix(PathBuf::from(cstr(path))))) {
+    match rt.block_on(GrpcSession::connect(ConnectAddr::Unix(PathBuf::from(
+        cstr(path),
+    )))) {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_session_t { rt, inner })),
         Err(_) => std::ptr::null_mut(),
     }
@@ -233,8 +240,7 @@ pub unsafe extern "C" fn zgrpc_declare_publisher(
         .block_on(session.inner.declare_publisher(DeclarePublisherArgs {
             key_expr: cstr(key_expr),
             ..Default::default()
-        }))
-    {
+        })) {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_publisher_t {
             rt: session.rt.clone(),
             inner,
@@ -288,16 +294,13 @@ pub unsafe extern "C" fn zgrpc_declare_subscriber(
     let Some(session) = take_session(session) else {
         return ptr::null_mut();
     };
-    match session
-        .rt
-        .block_on(session.inner.declare_subscriber(
-            DeclareSubscriberArgs {
-                key_expr: cstr(key_expr),
-                ..Default::default()
-            },
-            None,
-        ))
-    {
+    match session.rt.block_on(session.inner.declare_subscriber(
+        DeclareSubscriberArgs {
+            key_expr: cstr(key_expr),
+            ..Default::default()
+        },
+        None,
+    )) {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_subscriber_t {
             rt: session.rt.clone(),
             inner,
@@ -314,16 +317,13 @@ pub unsafe extern "C" fn zgrpc_declare_queryable(
     let Some(session) = take_session(session) else {
         return ptr::null_mut();
     };
-    match session
-        .rt
-        .block_on(session.inner.declare_queryable(
-            DeclareQueryableArgs {
-                key_expr: cstr(key_expr),
-                ..Default::default()
-            },
-            None,
-        ))
-    {
+    match session.rt.block_on(session.inner.declare_queryable(
+        DeclareQueryableArgs {
+            key_expr: cstr(key_expr),
+            ..Default::default()
+        },
+        None,
+    )) {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_queryable_t {
             rt: session.rt.clone(),
             inner,
@@ -345,8 +345,7 @@ pub unsafe extern "C" fn zgrpc_declare_querier(
         .block_on(session.inner.declare_querier(DeclareQuerierArgs {
             key_expr: cstr(key_expr),
             ..Default::default()
-        }))
-    {
+        })) {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_querier_t {
             rt: session.rt.clone(),
             inner,
@@ -514,11 +513,15 @@ pub unsafe extern "C" fn zgrpc_queryable_reply_err(
         return -1;
     };
     let payload = std::slice::from_raw_parts(payload, payload_len).to_vec();
-    status(queryable.rt.block_on(queryable.inner.reply_err(QueryReplyErrArgs {
-        query_id,
-        payload,
-        ..Default::default()
-    })))
+    status(
+        queryable
+            .rt
+            .block_on(queryable.inner.reply_err(QueryReplyErrArgs {
+                query_id,
+                payload,
+                ..Default::default()
+            })),
+    )
 }
 
 #[no_mangle]
@@ -530,11 +533,15 @@ pub unsafe extern "C" fn zgrpc_queryable_reply_delete(
     let Some(queryable) = take_queryable(queryable) else {
         return -1;
     };
-    status(queryable.rt.block_on(queryable.inner.reply_delete(QueryReplyDeleteArgs {
-        query_id,
-        key_expr: cstr(key_expr),
-        ..Default::default()
-    })))
+    status(
+        queryable
+            .rt
+            .block_on(queryable.inner.reply_delete(QueryReplyDeleteArgs {
+                query_id,
+                key_expr: cstr(key_expr),
+                ..Default::default()
+            })),
+    )
 }
 
 #[no_mangle]

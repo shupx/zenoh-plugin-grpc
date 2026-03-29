@@ -15,23 +15,21 @@ use tonic::transport::{Channel, Endpoint};
 use tower::service_fn;
 use uuid::Uuid;
 use zenoh_grpc_proto::v1::{
-    self as pb,
-    publisher_service_client::PublisherServiceClient,
-    querier_service_client::QuerierServiceClient,
-    queryable_service_client::QueryableServiceClient,
+    self as pb, publisher_service_client::PublisherServiceClient,
+    querier_service_client::QuerierServiceClient, queryable_service_client::QueryableServiceClient,
     session_service_client::SessionServiceClient,
     subscriber_service_client::SubscriberServiceClient,
 };
 
 pub use args::*;
-pub use queue::DropOldestReceiver;
 pub use pb::{
     CongestionControl, ConsolidationMode, Locality, Priority, QueryTarget, Reliability, SampleKind,
 };
+pub use queue::DropOldestReceiver;
 use queue::{bounded_drop_oldest, DropOldestSender};
 
 pub type SubscriberCallback = Arc<dyn Fn(pb::SubscriberEvent) + Send + Sync + 'static>;
-pub type QueryableCallback = Arc<dyn Fn(pb::QueryableEvent) + Send + Sync + 'static>;
+pub type QueryableCallback = Arc<dyn Fn(GrpcQuery) + Send + Sync + 'static>;
 
 #[derive(Debug, Clone)]
 pub enum ConnectAddr {
@@ -91,6 +89,23 @@ pub struct GrpcQuerier {
     handle: u64,
 }
 
+#[derive(Clone)]
+pub struct ReplyStream {
+    rx: DropOldestReceiver<pb::Reply>,
+}
+
+#[derive(Clone)]
+pub struct QueryStream {
+    queryable: GrpcQueryable,
+    rx: DropOldestReceiver<pb::QueryableEvent>,
+}
+
+#[derive(Clone)]
+pub struct GrpcQuery {
+    queryable: GrpcQueryable,
+    inner: pb::Query,
+}
+
 #[derive(Debug, Clone)]
 enum SessionCommand {
     Put(SessionPutArgs),
@@ -133,12 +148,20 @@ fn spawn_subscriber_callback_dispatcher(
 }
 
 fn spawn_queryable_callback_dispatcher(
+    queryable: GrpcQueryable,
     rx: DropOldestReceiver<pb::QueryableEvent>,
     callback: QueryableCallback,
 ) {
     thread::spawn(move || {
         while let Ok(event) = rx.recv() {
-            if catch_unwind(AssertUnwindSafe(|| (callback)(event))).is_err() {
+            let result = queryable.query_from_event(event);
+            if catch_unwind(AssertUnwindSafe(|| {
+                if let Ok(query) = result {
+                    (callback)(query)
+                }
+            }))
+            .is_err()
+            {
                 eprintln!("zenoh-grpc-client-rs: queryable callback panicked");
             }
         }
@@ -147,16 +170,22 @@ fn spawn_queryable_callback_dispatcher(
 
 async fn connect_channel(addr: &ConnectAddr) -> Result<Channel, tonic::transport::Error> {
     match addr {
-        ConnectAddr::Tcp(addr) => Endpoint::from_shared(format!("http://{addr}"))?.connect().await,
-        ConnectAddr::Unix(path) => Endpoint::try_from("http://[::]:50051")?
-            .connect_with_connector(service_fn({
-                let path = path.clone();
-                move |_| {
+        ConnectAddr::Tcp(addr) => {
+            Endpoint::from_shared(format!("http://{addr}"))?
+                .connect()
+                .await
+        }
+        ConnectAddr::Unix(path) => {
+            Endpoint::try_from("http://[::]:50051")?
+                .connect_with_connector(service_fn({
                     let path = path.clone();
-                    async move { UnixStream::connect(path).await.map(TokioIo::new) }
-                }
-            }))
-            .await,
+                    move |_| {
+                        let path = path.clone();
+                        async move { UnixStream::connect(path).await.map(TokioIo::new) }
+                    }
+                }))
+                .await
+        }
     }
 }
 
@@ -168,10 +197,7 @@ impl GrpcSession {
             client_id: Uuid::new_v4().to_string(),
         });
         let (write_tx, write_rx) = bounded_drop_oldest(SEND_QUEUE_CAPACITY);
-        let session = Self {
-            inner,
-            write_tx,
-        };
+        let session = Self { inner, write_tx };
         session.spawn_session_worker(write_rx);
         Ok(session)
     }
@@ -270,7 +296,7 @@ impl GrpcSession {
             .map_err(|_| tonic::Status::unavailable("session send queue closed").into())
     }
 
-    pub async fn get(&self, req: SessionGetArgs) -> Result<DropOldestReceiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: SessionGetArgs) -> Result<ReplyStream, Error> {
         let mut stream = self
             .session_client()
             .get(pb::SessionGetRequest {
@@ -292,7 +318,7 @@ impl GrpcSession {
                 let _ = tx.push(reply);
             }
         });
-        Ok(rx)
+        Ok(ReplyStream { rx })
     }
 
     pub async fn cleanup(&self) -> Result<(), Error> {
@@ -305,7 +331,10 @@ impl GrpcSession {
         Ok(())
     }
 
-    pub async fn declare_publisher(&self, req: DeclarePublisherArgs) -> Result<GrpcPublisher, Error> {
+    pub async fn declare_publisher(
+        &self,
+        req: DeclarePublisherArgs,
+    ) -> Result<GrpcPublisher, Error> {
         let handle = self
             .publisher_client()
             .declare_publisher(pb::DeclarePublisherRequest {
@@ -425,7 +454,7 @@ impl GrpcSession {
             },
         };
         if let Some(callback) = callback {
-            spawn_queryable_callback_dispatcher(queryable.rx.clone(), callback);
+            spawn_queryable_callback_dispatcher(queryable.clone(), queryable.rx.clone(), callback);
         }
         queryable.spawn_worker(write_rx);
         Ok(queryable)
@@ -675,22 +704,27 @@ impl GrpcQueryable {
         self.write_tx.dropped_count()
     }
 
-    pub fn receiver(&self) -> Result<&DropOldestReceiver<pb::QueryableEvent>, Error> {
+    pub fn receiver(&self) -> Result<QueryStream, Error> {
         self.ensure_pull_mode()?;
-        Ok(&self.rx)
+        Ok(QueryStream {
+            queryable: self.clone(),
+            rx: self.rx.clone(),
+        })
     }
 
-    pub fn recv(&self) -> Result<pb::QueryableEvent, Error> {
+    pub fn recv(&self) -> Result<GrpcQuery, Error> {
         self.ensure_pull_mode()?;
-        self.rx
+        let event = self
+            .rx
             .recv()
-            .map_err(|_| tonic::Status::unavailable("queryable event queue closed").into())
+            .map_err(|_| tonic::Status::unavailable("queryable event queue closed"))?;
+        self.query_from_event(event)
     }
 
-    pub fn try_recv(&self) -> Result<Option<pb::QueryableEvent>, Error> {
+    pub fn try_recv(&self) -> Result<Option<GrpcQuery>, Error> {
         self.ensure_pull_mode()?;
         match self.rx.try_recv() {
-            Ok(event) => Ok(Some(event)),
+            Ok(event) => Ok(Some(self.query_from_event(event)?)),
             Err(flume::TryRecvError::Empty) => Ok(None),
             Err(flume::TryRecvError::Disconnected) => {
                 Err(tonic::Status::unavailable("queryable event queue closed").into())
@@ -731,6 +765,16 @@ impl GrpcQueryable {
             .await?;
         Ok(())
     }
+
+    fn query_from_event(&self, event: pb::QueryableEvent) -> Result<GrpcQuery, Error> {
+        let inner = event
+            .query
+            .ok_or_else(|| tonic::Status::unavailable("queryable event missing query"))?;
+        Ok(GrpcQuery {
+            queryable: self.clone(),
+            inner,
+        })
+    }
 }
 
 impl GrpcQuerier {
@@ -738,7 +782,7 @@ impl GrpcQuerier {
         self.handle
     }
 
-    pub async fn get(&self, req: QuerierGetArgs) -> Result<DropOldestReceiver<pb::Reply>, Error> {
+    pub async fn get(&self, req: QuerierGetArgs) -> Result<ReplyStream, Error> {
         let mut stream = self
             .session
             .querier_client()
@@ -758,7 +802,7 @@ impl GrpcQuerier {
                 let _ = tx.push(reply);
             }
         });
-        Ok(rx)
+        Ok(ReplyStream { rx })
     }
 
     pub async fn undeclare(&self) -> Result<(), Error> {
@@ -770,5 +814,155 @@ impl GrpcQuerier {
             })
             .await?;
         Ok(())
+    }
+}
+
+impl ReplyStream {
+    pub fn recv(&self) -> Result<pb::Reply, Error> {
+        self.rx
+            .recv()
+            .map_err(|_| tonic::Status::unavailable("reply stream closed").into())
+    }
+
+    pub fn try_recv(&self) -> Result<Option<pb::Reply>, Error> {
+        match self.rx.try_recv() {
+            Ok(reply) => Ok(Some(reply)),
+            Err(flume::TryRecvError::Empty) => Ok(None),
+            Err(flume::TryRecvError::Disconnected) => {
+                Err(tonic::Status::unavailable("reply stream closed").into())
+            }
+        }
+    }
+
+    pub async fn recv_async(&self) -> Result<pb::Reply, Error> {
+        self.rx
+            .recv_async()
+            .await
+            .map_err(|_| tonic::Status::unavailable("reply stream closed").into())
+    }
+
+    pub fn dropped_count(&self) -> u64 {
+        self.rx.dropped_count()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.rx.is_disconnected()
+    }
+}
+
+impl QueryStream {
+    pub fn recv(&self) -> Result<GrpcQuery, Error> {
+        let event = self
+            .rx
+            .recv()
+            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
+        self.queryable.query_from_event(event)
+    }
+
+    pub fn try_recv(&self) -> Result<Option<GrpcQuery>, Error> {
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(self.queryable.query_from_event(event)?)),
+            Err(flume::TryRecvError::Empty) => Ok(None),
+            Err(flume::TryRecvError::Disconnected) => {
+                Err(tonic::Status::unavailable("query stream closed").into())
+            }
+        }
+    }
+
+    pub async fn recv_async(&self) -> Result<GrpcQuery, Error> {
+        let event = self
+            .rx
+            .recv_async()
+            .await
+            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
+        self.queryable.query_from_event(event)
+    }
+
+    pub fn dropped_count(&self) -> u64 {
+        self.rx.dropped_count()
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.rx.is_disconnected()
+    }
+}
+
+impl GrpcQuery {
+    pub fn query_id(&self) -> u64 {
+        self.inner.query_id
+    }
+
+    pub fn selector(&self) -> &str {
+        &self.inner.selector
+    }
+
+    pub fn key_expr(&self) -> &str {
+        &self.inner.key_expr
+    }
+
+    pub fn parameters(&self) -> &str {
+        &self.inner.parameters
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &self.inner.payload
+    }
+
+    pub fn encoding(&self) -> &str {
+        &self.inner.encoding
+    }
+
+    pub fn attachment(&self) -> &[u8] {
+        &self.inner.attachment
+    }
+
+    pub async fn reply(
+        &self,
+        key_expr: impl Into<String>,
+        payload: impl Into<Vec<u8>>,
+        encoding: impl Into<String>,
+        attachment: impl Into<Vec<u8>>,
+        timestamp: impl Into<String>,
+    ) -> Result<(), Error> {
+        self.queryable
+            .reply(QueryReplyArgs {
+                query_id: self.inner.query_id,
+                key_expr: key_expr.into(),
+                payload: payload.into(),
+                encoding: encoding.into(),
+                attachment: attachment.into(),
+                timestamp: timestamp.into(),
+            })
+            .await
+    }
+
+    pub async fn reply_err(
+        &self,
+        payload: impl Into<Vec<u8>>,
+        encoding: impl Into<String>,
+    ) -> Result<(), Error> {
+        self.queryable
+            .reply_err(QueryReplyErrArgs {
+                query_id: self.inner.query_id,
+                payload: payload.into(),
+                encoding: encoding.into(),
+            })
+            .await
+    }
+
+    pub async fn reply_delete(
+        &self,
+        key_expr: impl Into<String>,
+        attachment: impl Into<Vec<u8>>,
+        timestamp: impl Into<String>,
+    ) -> Result<(), Error> {
+        self.queryable
+            .reply_delete(QueryReplyDeleteArgs {
+                query_id: self.inner.query_id,
+                key_expr: key_expr.into(),
+                attachment: attachment.into(),
+                timestamp: timestamp.into(),
+            })
+            .await
     }
 }
