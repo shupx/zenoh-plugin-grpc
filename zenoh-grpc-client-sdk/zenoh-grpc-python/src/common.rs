@@ -11,7 +11,7 @@ pub(crate) fn runtime() -> Arc<Runtime> {
     //     .clone()
     RT.get_or_init(|| {
         let rt = Builder::new_multi_thread()
-            .worker_threads(1) // too many threads are not helpful for IO operations, spawn() will use these threads.
+            .worker_threads(2) // too many threads are not helpful for IO operations, spawn() will use these threads.
             .max_blocking_threads(16)    // allow more threads for cpu heavy operations, spawn_blocking() will use these threads.
             .enable_all()
             .build()

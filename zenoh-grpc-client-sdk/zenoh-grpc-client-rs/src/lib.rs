@@ -1,7 +1,12 @@
 mod args;
 mod queue;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    panic::{catch_unwind, AssertUnwindSafe},
+    path::PathBuf,
+    sync::Arc,
+    thread,
+};
 
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
@@ -25,6 +30,9 @@ pub use pb::{
 };
 use queue::{bounded_drop_oldest, DropOldestSender};
 
+pub type SubscriberCallback = Arc<dyn Fn(pb::SubscriberEvent) + Send + Sync + 'static>;
+pub type QueryableCallback = Arc<dyn Fn(pb::QueryableEvent) + Send + Sync + 'static>;
+
 #[derive(Debug, Clone)]
 pub enum ConnectAddr {
     Tcp(String),
@@ -37,6 +45,8 @@ pub enum Error {
     Transport(#[from] tonic::transport::Error),
     #[error(transparent)]
     Status(#[from] tonic::Status),
+    #[error("{kind} is callback-driven")]
+    CallbackDriven { kind: &'static str },
 }
 
 #[derive(Clone)]
@@ -63,6 +73,7 @@ pub struct GrpcSubscriber {
     session: GrpcSession,
     handle: u64,
     rx: DropOldestReceiver<pb::SubscriberEvent>,
+    mode: ConsumerMode,
 }
 
 #[derive(Clone)]
@@ -71,6 +82,7 @@ pub struct GrpcQueryable {
     handle: u64,
     rx: DropOldestReceiver<pb::QueryableEvent>,
     write_tx: DropOldestSender<QueryableCommand>,
+    mode: ConsumerMode,
 }
 
 #[derive(Clone)]
@@ -98,8 +110,40 @@ enum QueryableCommand {
     ReplyDelete(QueryReplyDeleteArgs),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConsumerMode {
+    Pull,
+    Callback,
+}
+
 const SEND_QUEUE_CAPACITY: usize = 256;
 const RECV_QUEUE_CAPACITY: usize = 256;
+
+fn spawn_subscriber_callback_dispatcher(
+    rx: DropOldestReceiver<pb::SubscriberEvent>,
+    callback: SubscriberCallback,
+) {
+    thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            if catch_unwind(AssertUnwindSafe(|| (callback)(event))).is_err() {
+                eprintln!("zenoh-grpc-client-rs: subscriber callback panicked");
+            }
+        }
+    });
+}
+
+fn spawn_queryable_callback_dispatcher(
+    rx: DropOldestReceiver<pb::QueryableEvent>,
+    callback: QueryableCallback,
+) {
+    thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+            if catch_unwind(AssertUnwindSafe(|| (callback)(event))).is_err() {
+                eprintln!("zenoh-grpc-client-rs: queryable callback panicked");
+            }
+        }
+    });
+}
 
 async fn connect_channel(addr: &ConnectAddr) -> Result<Channel, tonic::transport::Error> {
     match addr {
@@ -293,7 +337,11 @@ impl GrpcSession {
         })
     }
 
-    pub async fn declare_subscriber(&self, req: DeclareSubscriberArgs) -> Result<GrpcSubscriber, Error> {
+    pub async fn declare_subscriber(
+        &self,
+        req: DeclareSubscriberArgs,
+        callback: Option<SubscriberCallback>,
+    ) -> Result<GrpcSubscriber, Error> {
         let handle = self
             .subscriber_client()
             .declare_subscriber(pb::DeclareSubscriberRequest {
@@ -318,14 +366,27 @@ impl GrpcSession {
                 let _ = tx.push(event);
             }
         });
-        Ok(GrpcSubscriber {
+        let subscriber = GrpcSubscriber {
             session: self.clone(),
             handle,
             rx,
-        })
+            mode: if callback.is_some() {
+                ConsumerMode::Callback
+            } else {
+                ConsumerMode::Pull
+            },
+        };
+        if let Some(callback) = callback {
+            spawn_subscriber_callback_dispatcher(subscriber.rx.clone(), callback);
+        }
+        Ok(subscriber)
     }
 
-    pub async fn declare_queryable(&self, req: DeclareQueryableArgs) -> Result<GrpcQueryable, Error> {
+    pub async fn declare_queryable(
+        &self,
+        req: DeclareQueryableArgs,
+        callback: Option<QueryableCallback>,
+    ) -> Result<GrpcQueryable, Error> {
         let handle = self
             .queryable_client()
             .declare_queryable(pb::DeclareQueryableRequest {
@@ -357,7 +418,15 @@ impl GrpcSession {
             handle,
             rx,
             write_tx,
+            mode: if callback.is_some() {
+                ConsumerMode::Callback
+            } else {
+                ConsumerMode::Pull
+            },
         };
+        if let Some(callback) = callback {
+            spawn_queryable_callback_dispatcher(queryable.rx.clone(), callback);
+        }
         queryable.spawn_worker(write_rx);
         Ok(queryable)
     }
@@ -482,12 +551,39 @@ impl GrpcPublisher {
 }
 
 impl GrpcSubscriber {
+    fn ensure_pull_mode(&self) -> Result<(), Error> {
+        if self.mode == ConsumerMode::Callback {
+            Err(Error::CallbackDriven { kind: "subscriber" })
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn handle(&self) -> u64 {
         self.handle
     }
 
-    pub fn receiver(&self) -> &DropOldestReceiver<pb::SubscriberEvent> {
-        &self.rx
+    pub fn receiver(&self) -> Result<&DropOldestReceiver<pb::SubscriberEvent>, Error> {
+        self.ensure_pull_mode()?;
+        Ok(&self.rx)
+    }
+
+    pub fn recv(&self) -> Result<pb::SubscriberEvent, Error> {
+        self.ensure_pull_mode()?;
+        self.rx
+            .recv()
+            .map_err(|_| tonic::Status::unavailable("subscriber event queue closed").into())
+    }
+
+    pub fn try_recv(&self) -> Result<Option<pb::SubscriberEvent>, Error> {
+        self.ensure_pull_mode()?;
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(flume::TryRecvError::Empty) => Ok(None),
+            Err(flume::TryRecvError::Disconnected) => {
+                Err(tonic::Status::unavailable("subscriber event queue closed").into())
+            }
+        }
     }
 
     pub fn dropped_count(&self) -> u64 {
@@ -507,6 +603,14 @@ impl GrpcSubscriber {
 }
 
 impl GrpcQueryable {
+    fn ensure_pull_mode(&self) -> Result<(), Error> {
+        if self.mode == ConsumerMode::Callback {
+            Err(Error::CallbackDriven { kind: "queryable" })
+        } else {
+            Ok(())
+        }
+    }
+
     fn spawn_worker(&self, rx: DropOldestReceiver<QueryableCommand>) {
         let queryable = self.clone();
         tokio::spawn(async move {
@@ -571,8 +675,27 @@ impl GrpcQueryable {
         self.write_tx.dropped_count()
     }
 
-    pub fn receiver(&self) -> &DropOldestReceiver<pb::QueryableEvent> {
-        &self.rx
+    pub fn receiver(&self) -> Result<&DropOldestReceiver<pb::QueryableEvent>, Error> {
+        self.ensure_pull_mode()?;
+        Ok(&self.rx)
+    }
+
+    pub fn recv(&self) -> Result<pb::QueryableEvent, Error> {
+        self.ensure_pull_mode()?;
+        self.rx
+            .recv()
+            .map_err(|_| tonic::Status::unavailable("queryable event queue closed").into())
+    }
+
+    pub fn try_recv(&self) -> Result<Option<pb::QueryableEvent>, Error> {
+        self.ensure_pull_mode()?;
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(flume::TryRecvError::Empty) => Ok(None),
+            Err(flume::TryRecvError::Disconnected) => {
+                Err(tonic::Status::unavailable("queryable event queue closed").into())
+            }
+        }
     }
 
     pub fn dropped_count(&self) -> u64 {

@@ -8,6 +8,8 @@ The public API uses request structs instead of simplified helper overloads, so c
 
 Streamed receives (`subscriber`, `queryable`, `session.get`, `querier.get`) also use local bounded queues with drop-oldest behavior, so slow consumers do not backpressure the gRPC stream reader. Use `dropped_count()` on receivers and `send_dropped_count()` on send-capable objects to observe overflow.
 
+`declare_subscriber` and `declare_queryable` also accept an optional callback. When present, the object switches to callback-driven mode: a dedicated OS thread drains the local queue in order and invokes the callback sequentially. In that mode, `recv/try_recv/receiver` are no longer available on the object.
+
 ## Build
 
 ```bash

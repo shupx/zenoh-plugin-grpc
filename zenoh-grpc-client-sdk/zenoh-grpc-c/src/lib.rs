@@ -290,10 +290,13 @@ pub unsafe extern "C" fn zgrpc_declare_subscriber(
     };
     match session
         .rt
-        .block_on(session.inner.declare_subscriber(DeclareSubscriberArgs {
-            key_expr: cstr(key_expr),
-            ..Default::default()
-        }))
+        .block_on(session.inner.declare_subscriber(
+            DeclareSubscriberArgs {
+                key_expr: cstr(key_expr),
+                ..Default::default()
+            },
+            None,
+        ))
     {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_subscriber_t {
             rt: session.rt.clone(),
@@ -313,10 +316,13 @@ pub unsafe extern "C" fn zgrpc_declare_queryable(
     };
     match session
         .rt
-        .block_on(session.inner.declare_queryable(DeclareQueryableArgs {
-            key_expr: cstr(key_expr),
-            ..Default::default()
-        }))
+        .block_on(session.inner.declare_queryable(
+            DeclareQueryableArgs {
+                key_expr: cstr(key_expr),
+                ..Default::default()
+            },
+            None,
+        ))
     {
         Ok(inner) => Box::into_raw(Box::new(zgrpc_queryable_t {
             rt: session.rt.clone(),
@@ -424,7 +430,7 @@ pub unsafe extern "C" fn zgrpc_subscriber_recv(
     let Some(subscriber) = take_subscriber(subscriber) else {
         return -1;
     };
-    match subscriber.inner.receiver().recv() {
+    match subscriber.inner.recv() {
         Ok(event) => match event.sample {
             Some(sample) => fill_sample(sample_out, &sample),
             None => -1,
@@ -441,12 +447,12 @@ pub unsafe extern "C" fn zgrpc_subscriber_try_recv(
     let Some(subscriber) = take_subscriber(subscriber) else {
         return -1;
     };
-    match subscriber.inner.receiver().try_recv() {
-        Ok(event) => match event.sample {
+    match subscriber.inner.try_recv() {
+        Ok(Some(event)) => match event.sample {
             Some(sample) => fill_sample(sample_out, &sample),
             None => -1,
         },
-        Err(flume::TryRecvError::Empty) => 1,
+        Ok(None) => 1,
         Err(_) => -1,
     }
 }
@@ -468,7 +474,7 @@ pub unsafe extern "C" fn zgrpc_queryable_recv(
     let Some(queryable) = take_queryable(queryable) else {
         return -1;
     };
-    match queryable.inner.receiver().recv() {
+    match queryable.inner.recv() {
         Ok(event) => match event.query {
             Some(query) => fill_query(query_out, &query),
             None => -1,

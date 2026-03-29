@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .declare_subscriber(DeclareSubscriberArgs {
             key_expr: "demo/example/**".into(),
             ..Default::default()
-        })
+        }, None)
         .await?;
     let publisher = pub_session
         .declare_publisher(DeclarePublisherArgs {
@@ -30,7 +30,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await?;
 
-    let event = timeout(Duration::from_secs(5), subscriber.receiver().recv_async()).await??;
+    let event = timeout(
+        Duration::from_secs(5),
+        subscriber.receiver()?.recv_async(),
+    )
+    .await??;
     if let Some(sample) = event.sample {
         println!(
             "received {} => {}",

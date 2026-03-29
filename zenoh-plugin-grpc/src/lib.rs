@@ -1013,7 +1013,7 @@ mod tests {
             .declare_subscriber(DeclareSubscriberArgs {
                 key_expr: "demo/e2e/**".into(),
                 ..Default::default()
-            })
+            }, None)
             .await
             .unwrap();
         let publisher = pub_client
@@ -1032,7 +1032,7 @@ mod tests {
             .await
             .unwrap();
 
-        let event = timeout(Duration::from_secs(5), subscriber.receiver().recv_async())
+        let event = timeout(Duration::from_secs(5), subscriber.receiver().unwrap().recv_async())
             .await
             .unwrap()
             .unwrap();
@@ -1058,14 +1058,14 @@ mod tests {
             .declare_queryable(DeclareQueryableArgs {
                 key_expr: "demo/query/**".into(),
                 ..Default::default()
-            })
+            }, None)
             .await
             .unwrap();
 
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(Duration::from_secs(5), queryable.receiver().recv_async())
+                let event = timeout(Duration::from_secs(5), queryable.receiver().unwrap().recv_async())
                     .await
                     .unwrap()
                     .unwrap();
@@ -1118,7 +1118,7 @@ mod tests {
             .declare_queryable(DeclareQueryableArgs {
                 key_expr: "demo/querier/**".into(),
                 ..Default::default()
-            })
+            }, None)
             .await
             .unwrap();
         let querier = querier_client
@@ -1132,7 +1132,7 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let event = timeout(Duration::from_secs(5), queryable.receiver().recv_async())
+                let event = timeout(Duration::from_secs(5), queryable.receiver().unwrap().recv_async())
                     .await
                     .unwrap()
                     .unwrap();

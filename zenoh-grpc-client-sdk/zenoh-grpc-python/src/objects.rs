@@ -1,4 +1,4 @@
-use std::{sync::Arc, thread};
+use std::sync::Arc;
 
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
@@ -9,8 +9,9 @@ use zenoh_grpc_client_rs::{
     GrpcSession, GrpcSubscriber, PublisherDeleteArgs as RsPublisherDeleteArgs,
     PublisherPutArgs as RsPublisherPutArgs, QuerierGetArgs as RsQuerierGetArgs,
     QueryReplyArgs as RsQueryReplyArgs, QueryReplyDeleteArgs as RsQueryReplyDeleteArgs,
-    QueryReplyErrArgs as RsQueryReplyErrArgs, SessionDeleteArgs as RsSessionDeleteArgs,
-    SessionGetArgs as RsSessionGetArgs, SessionPutArgs as RsSessionPutArgs,
+    QueryReplyErrArgs as RsQueryReplyErrArgs, QueryableCallback as RsQueryableCallback,
+    SessionDeleteArgs as RsSessionDeleteArgs, SessionGetArgs as RsSessionGetArgs,
+    SessionPutArgs as RsSessionPutArgs, SubscriberCallback as RsSubscriberCallback,
 };
 
 use crate::{
@@ -190,14 +191,31 @@ impl Session {
         })
     }
 
-    #[pyo3(signature = (key_expr, allowed_origin=None))]
-    fn declare_subscriber(&self, key_expr: String, allowed_origin: Option<i32>) -> PyResult<Subscriber> {
+    #[pyo3(signature = (key_expr, callback=None, allowed_origin=None))]
+    fn declare_subscriber(
+        &self,
+        key_expr: String,
+        callback: Option<Py<PyAny>>,
+        allowed_origin: Option<i32>,
+    ) -> PyResult<Subscriber> {
+        let callback: Option<RsSubscriberCallback> = callback.map(|callback| {
+            Arc::new(move |inner| {
+                Python::with_gil(|py| {
+                    if let Err(err) = callback.call1(py, (SubscriberEvent { inner },)) {
+                        err.print(py);
+                    }
+                });
+            }) as RsSubscriberCallback
+        });
         let inner = self
             .rt
-            .block_on(self.inner.declare_subscriber(RsDeclareSubscriberArgs {
-                key_expr,
-                allowed_origin: allowed_origin.unwrap_or_default(),
-            }))
+            .block_on(self.inner.declare_subscriber(
+                RsDeclareSubscriberArgs {
+                    key_expr,
+                    allowed_origin: allowed_origin.unwrap_or_default(),
+                },
+                callback,
+            ))
             .map_err(to_py_err)?;
         Ok(Subscriber {
             rt: self.rt.clone(),
@@ -205,20 +223,33 @@ impl Session {
         })
     }
 
-    #[pyo3(signature = (key_expr, complete=false, allowed_origin=None))]
+    #[pyo3(signature = (key_expr, callback=None, complete=false, allowed_origin=None))]
     fn declare_queryable(
         &self,
         key_expr: String,
+        callback: Option<Py<PyAny>>,
         complete: bool,
         allowed_origin: Option<i32>,
     ) -> PyResult<Queryable> {
+        let callback: Option<RsQueryableCallback> = callback.map(|callback| {
+            Arc::new(move |inner| {
+                Python::with_gil(|py| {
+                    if let Err(err) = callback.call1(py, (QueryableEvent { inner },)) {
+                        err.print(py);
+                    }
+                });
+            }) as RsQueryableCallback
+        });
         let inner = self
             .rt
-            .block_on(self.inner.declare_queryable(RsDeclareQueryableArgs {
-                key_expr,
-                complete,
-                allowed_origin: allowed_origin.unwrap_or_default(),
-            }))
+            .block_on(self.inner.declare_queryable(
+                RsDeclareQueryableArgs {
+                    key_expr,
+                    complete,
+                    allowed_origin: allowed_origin.unwrap_or_default(),
+                },
+                callback,
+            ))
             .map_err(to_py_err)?;
         Ok(Queryable {
             rt: self.rt.clone(),
@@ -321,18 +352,16 @@ impl Subscriber {
 
     fn recv(&self) -> PyResult<SubscriberEvent> {
         self.inner
-            .receiver()
             .recv()
             .map(|inner| SubscriberEvent { inner })
             .map_err(to_py_err)
     }
 
     fn try_recv(&self) -> PyResult<Option<SubscriberEvent>> {
-        match self.inner.receiver().try_recv() {
-            Ok(inner) => Ok(Some(SubscriberEvent { inner })),
-            Err(flume::TryRecvError::Empty) => Ok(None),
-            Err(err) => Err(to_py_err(err)),
-        }
+        self.inner
+            .try_recv()
+            .map(|event| event.map(|inner| SubscriberEvent { inner }))
+            .map_err(to_py_err)
     }
 
     fn undeclare(&self) -> PyResult<()> {
@@ -341,17 +370,6 @@ impl Subscriber {
 
     fn dropped_count(&self) -> u64 {
         self.inner.dropped_count()
-    }
-
-    fn run(&self, callback: Py<PyAny>) {
-        let subscriber = self.inner.clone();
-        thread::spawn(move || {
-            while let Ok(inner) = subscriber.receiver().recv() {
-                Python::with_gil(|py| {
-                    let _ = callback.call1(py, (SubscriberEvent { inner },));
-                });
-            }
-        });
     }
 }
 
@@ -372,7 +390,6 @@ impl Queryable {
 
     fn recv(&self) -> PyResult<QueryableEvent> {
         self.inner
-            .receiver()
             .recv()
             .map(|inner| QueryableEvent { inner })
             .map_err(to_py_err)
@@ -439,17 +456,6 @@ impl Queryable {
 
     fn send_dropped_count(&self) -> u64 {
         self.inner.send_dropped_count()
-    }
-
-    fn run(&self, callback: Py<PyAny>) {
-        let queryable = self.inner.clone();
-        thread::spawn(move || {
-            while let Ok(inner) = queryable.receiver().recv() {
-                Python::with_gil(|py| {
-                    let _ = callback.call1(py, (QueryableEvent { inner },));
-                });
-            }
-        });
     }
 }
 

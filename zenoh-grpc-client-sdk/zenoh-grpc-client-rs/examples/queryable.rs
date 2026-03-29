@@ -14,11 +14,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .declare_queryable(DeclareQueryableArgs {
             key_expr: "demo/query/**".into(),
             ..Default::default()
-        })
+        }, None)
         .await?;
 
     tokio::spawn(async move {
-        if let Ok(event) = queryable.receiver().recv_async().await {
+        if let Ok(event) = queryable.receiver()?.recv_async().await {
             if let Some(query) = event.query {
                 let _ = queryable
                     .reply(QueryReplyArgs {
@@ -30,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .await;
             }
         }
+        Ok::<(), zenoh_grpc_client_rs::Error>(())
     });
 
     let replies = getter_session
