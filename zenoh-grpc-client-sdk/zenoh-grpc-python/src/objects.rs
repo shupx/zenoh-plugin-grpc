@@ -56,34 +56,41 @@ impl Session {
 
     fn __exit__(
         &self,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.close()
+        self.close(py)
     }
 
     #[staticmethod]
     #[pyo3(signature = (endpoint = "unix:///tmp/zenoh-grpc.sock".to_string()))]
-    fn connect(endpoint: String) -> PyResult<Self> {
+    fn connect(py: Python<'_>, endpoint: String) -> PyResult<Self> {
         let rt = runtime();
-        let inner = rt
-            .block_on(GrpcSession::connect(parse_connect_addr(&endpoint)?))
+        let addr = parse_connect_addr(&endpoint)?;
+        let inner = py
+            .allow_threads(|| rt.block_on(GrpcSession::connect(addr)))
             .map_err(to_py_err)?;
         Ok(Self { rt, inner })
     }
 
-    fn info(&self) -> PyResult<String> {
-        Ok(self.rt.block_on(self.inner.info()).map_err(to_py_err)?.zid)
+    fn info(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(py
+            .allow_threads(|| self.rt.block_on(self.inner.info()))
+            .map_err(to_py_err)?
+            .zid)
     }
 
-    fn close(&self) -> PyResult<()> {
-        self.rt.block_on(self.inner.cleanup()).map_err(to_py_err)
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.rt.block_on(self.inner.cleanup()))
+            .map_err(to_py_err)
     }
 
     #[pyo3(signature = (key_expr, payload, encoding=None, congestion_control=None, priority=None, express=false, attachment=None, timestamp=None, allowed_destination=None))]
     fn put(
         &self,
+        py: Python<'_>,
         key_expr: String,
         payload: Vec<u8>,
         encoding: Option<String>,
@@ -94,8 +101,8 @@ impl Session {
         timestamp: Option<String>,
         allowed_destination: Option<i32>,
     ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.put(RsSessionPutArgs {
+        py.allow_threads(|| {
+            self.rt.block_on(self.inner.put(RsSessionPutArgs {
                 key_expr,
                 payload,
                 encoding: encoding.unwrap_or_default(),
@@ -106,12 +113,14 @@ impl Session {
                 timestamp: timestamp.unwrap_or_default(),
                 allowed_destination: allowed_destination.unwrap_or_default(),
             }))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
     #[pyo3(signature = (key_expr, congestion_control=None, priority=None, express=false, attachment=None, timestamp=None, allowed_destination=None))]
     fn delete(
         &self,
+        py: Python<'_>,
         key_expr: String,
         congestion_control: Option<i32>,
         priority: Option<i32>,
@@ -120,8 +129,8 @@ impl Session {
         timestamp: Option<String>,
         allowed_destination: Option<i32>,
     ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.delete(RsSessionDeleteArgs {
+        py.allow_threads(|| {
+            self.rt.block_on(self.inner.delete(RsSessionDeleteArgs {
                 key_expr,
                 congestion_control: congestion_control.unwrap_or_default(),
                 priority: priority.unwrap_or_default(),
@@ -130,12 +139,14 @@ impl Session {
                 timestamp: timestamp.unwrap_or_default(),
                 allowed_destination: allowed_destination.unwrap_or_default(),
             }))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
     #[pyo3(signature = (selector, target=None, consolidation=None, timeout_ms=None, payload=None, encoding=None, attachment=None, allowed_destination=None))]
     fn get(
         &self,
+        py: Python<'_>,
         selector: String,
         target: Option<i32>,
         consolidation: Option<i32>,
@@ -145,18 +156,19 @@ impl Session {
         attachment: Option<Vec<u8>>,
         allowed_destination: Option<i32>,
     ) -> PyResult<ReplyStream> {
-        let replies = self
-            .rt
-            .block_on(self.inner.get(RsSessionGetArgs {
-                selector,
-                target: target.unwrap_or_default(),
-                consolidation: consolidation.unwrap_or_default(),
-                timeout_ms: timeout_ms.unwrap_or_default(),
-                payload: payload.unwrap_or_default(),
-                encoding: encoding.unwrap_or_default(),
-                attachment: attachment.unwrap_or_default(),
-                allowed_destination: allowed_destination.unwrap_or_default(),
-            }))
+        let replies = py
+            .allow_threads(|| {
+                self.rt.block_on(self.inner.get(RsSessionGetArgs {
+                    selector,
+                    target: target.unwrap_or_default(),
+                    consolidation: consolidation.unwrap_or_default(),
+                    timeout_ms: timeout_ms.unwrap_or_default(),
+                    payload: payload.unwrap_or_default(),
+                    encoding: encoding.unwrap_or_default(),
+                    attachment: attachment.unwrap_or_default(),
+                    allowed_destination: allowed_destination.unwrap_or_default(),
+                }))
+            })
             .map_err(to_py_err)?;
         Ok(ReplyStream::from_inner(replies))
     }
@@ -164,6 +176,7 @@ impl Session {
     #[pyo3(signature = (key_expr, encoding=None, congestion_control=None, priority=None, express=false, reliability=None, allowed_destination=None))]
     fn declare_publisher(
         &self,
+        py: Python<'_>,
         key_expr: String,
         encoding: Option<String>,
         congestion_control: Option<i32>,
@@ -172,17 +185,19 @@ impl Session {
         reliability: Option<i32>,
         allowed_destination: Option<i32>,
     ) -> PyResult<Publisher> {
-        let inner = self
-            .rt
-            .block_on(self.inner.declare_publisher(RsDeclarePublisherArgs {
-                key_expr,
-                encoding: encoding.unwrap_or_default(),
-                congestion_control: congestion_control.unwrap_or_default(),
-                priority: priority.unwrap_or_default(),
-                express,
-                reliability: reliability.unwrap_or_default(),
-                allowed_destination: allowed_destination.unwrap_or_default(),
-            }))
+        let inner = py
+            .allow_threads(|| {
+                self.rt
+                    .block_on(self.inner.declare_publisher(RsDeclarePublisherArgs {
+                        key_expr,
+                        encoding: encoding.unwrap_or_default(),
+                        congestion_control: congestion_control.unwrap_or_default(),
+                        priority: priority.unwrap_or_default(),
+                        express,
+                        reliability: reliability.unwrap_or_default(),
+                        allowed_destination: allowed_destination.unwrap_or_default(),
+                    }))
+            })
             .map_err(to_py_err)?;
         Ok(Publisher {
             rt: self.rt.clone(),
@@ -193,6 +208,7 @@ impl Session {
     #[pyo3(signature = (key_expr, callback=None, allowed_origin=None))]
     fn declare_subscriber(
         &self,
+        py: Python<'_>,
         key_expr: String,
         callback: Option<Py<PyAny>>,
         allowed_origin: Option<i32>,
@@ -206,15 +222,16 @@ impl Session {
                 });
             }) as RsSubscriberCallback
         });
-        let inner = self
-            .rt
-            .block_on(self.inner.declare_subscriber(
-                RsDeclareSubscriberArgs {
-                    key_expr,
-                    allowed_origin: allowed_origin.unwrap_or_default(),
-                },
-                callback,
-            ))
+        let inner = py
+            .allow_threads(|| {
+                self.rt.block_on(self.inner.declare_subscriber(
+                    RsDeclareSubscriberArgs {
+                        key_expr,
+                        allowed_origin: allowed_origin.unwrap_or_default(),
+                    },
+                    callback,
+                ))
+            })
             .map_err(to_py_err)?;
         Ok(Subscriber {
             rt: self.rt.clone(),
@@ -225,6 +242,7 @@ impl Session {
     #[pyo3(signature = (key_expr, callback=None, complete=false, allowed_origin=None))]
     fn declare_queryable(
         &self,
+        py: Python<'_>,
         key_expr: String,
         callback: Option<Py<PyAny>>,
         complete: bool,
@@ -241,16 +259,17 @@ impl Session {
                 });
             }) as RsQueryableCallback
         });
-        let inner = self
-            .rt
-            .block_on(self.inner.declare_queryable(
-                RsDeclareQueryableArgs {
-                    key_expr,
-                    complete,
-                    allowed_origin: allowed_origin.unwrap_or_default(),
-                },
-                callback,
-            ))
+        let inner = py
+            .allow_threads(|| {
+                self.rt.block_on(self.inner.declare_queryable(
+                    RsDeclareQueryableArgs {
+                        key_expr,
+                        complete,
+                        allowed_origin: allowed_origin.unwrap_or_default(),
+                    },
+                    callback,
+                ))
+            })
             .map_err(to_py_err)?;
         Ok(Queryable {
             rt: self.rt.clone(),
@@ -261,21 +280,24 @@ impl Session {
     #[pyo3(signature = (key_expr, target=None, consolidation=None, timeout_ms=None, allowed_destination=None))]
     fn declare_querier(
         &self,
+        py: Python<'_>,
         key_expr: String,
         target: Option<i32>,
         consolidation: Option<i32>,
         timeout_ms: Option<u64>,
         allowed_destination: Option<i32>,
     ) -> PyResult<Querier> {
-        let inner = self
-            .rt
-            .block_on(self.inner.declare_querier(RsDeclareQuerierArgs {
-                key_expr,
-                target: target.unwrap_or_default(),
-                consolidation: consolidation.unwrap_or_default(),
-                timeout_ms: timeout_ms.unwrap_or_default(),
-                allowed_destination: allowed_destination.unwrap_or_default(),
-            }))
+        let inner = py
+            .allow_threads(|| {
+                self.rt
+                    .block_on(self.inner.declare_querier(RsDeclareQuerierArgs {
+                        key_expr,
+                        target: target.unwrap_or_default(),
+                        consolidation: consolidation.unwrap_or_default(),
+                        timeout_ms: timeout_ms.unwrap_or_default(),
+                        allowed_destination: allowed_destination.unwrap_or_default(),
+                    }))
+            })
             .map_err(to_py_err)?;
         Ok(Querier {
             rt: self.rt.clone(),
@@ -292,43 +314,53 @@ impl Publisher {
 
     fn __exit__(
         &self,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.undeclare()
+        self.undeclare(py)
     }
 
     #[pyo3(signature = (payload, encoding=None, attachment=None, timestamp=None))]
     fn put(
         &self,
+        py: Python<'_>,
         payload: Vec<u8>,
         encoding: Option<String>,
         attachment: Option<Vec<u8>>,
         timestamp: Option<String>,
     ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.put(RsPublisherPutArgs {
+        py.allow_threads(|| {
+            self.rt.block_on(self.inner.put(RsPublisherPutArgs {
                 payload,
                 encoding: encoding.unwrap_or_default(),
                 attachment: attachment.unwrap_or_default(),
                 timestamp: timestamp.unwrap_or_default(),
             }))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
     #[pyo3(signature = (attachment=None, timestamp=None))]
-    fn delete(&self, attachment: Option<Vec<u8>>, timestamp: Option<String>) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner.delete(RsPublisherDeleteArgs {
+    fn delete(
+        &self,
+        py: Python<'_>,
+        attachment: Option<Vec<u8>>,
+        timestamp: Option<String>,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.rt.block_on(self.inner.delete(RsPublisherDeleteArgs {
                 attachment: attachment.unwrap_or_default(),
                 timestamp: timestamp.unwrap_or_default(),
             }))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
-    fn undeclare(&self) -> PyResult<()> {
-        self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
+    fn undeclare(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.rt.block_on(self.inner.undeclare()))
+            .map_err(to_py_err)
     }
 
     fn send_dropped_count(&self) -> u64 {
@@ -344,16 +376,16 @@ impl Subscriber {
 
     fn __exit__(
         &self,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.undeclare()
+        self.undeclare(py)
     }
 
-    fn recv(&self) -> PyResult<SubscriberEvent> {
-        self.inner
-            .recv()
+    fn recv(&self, py: Python<'_>) -> PyResult<SubscriberEvent> {
+        py.allow_threads(|| self.inner.recv())
             .map(|inner| SubscriberEvent { inner })
             .map_err(to_py_err)
     }
@@ -365,8 +397,9 @@ impl Subscriber {
             .map_err(to_py_err)
     }
 
-    fn undeclare(&self) -> PyResult<()> {
-        self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
+    fn undeclare(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.rt.block_on(self.inner.undeclare()))
+            .map_err(to_py_err)
     }
 
     fn dropped_count(&self) -> u64 {
@@ -382,11 +415,12 @@ impl Queryable {
 
     fn __exit__(
         &self,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.undeclare()
+        self.undeclare(py)
     }
 
     fn receiver(&self) -> PyResult<QueryStream> {
@@ -394,8 +428,9 @@ impl Queryable {
         Ok(QueryStream::from_inner(self.rt.clone(), receiver))
     }
 
-    fn undeclare(&self) -> PyResult<()> {
-        self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
+    fn undeclare(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.rt.block_on(self.inner.undeclare()))
+            .map_err(to_py_err)
     }
 
     fn send_dropped_count(&self) -> u64 {
@@ -411,35 +446,39 @@ impl Querier {
 
     fn __exit__(
         &self,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        self.undeclare()
+        self.undeclare(py)
     }
 
     #[pyo3(signature = (parameters=None, payload=None, encoding=None, attachment=None))]
     fn get(
         &self,
+        py: Python<'_>,
         parameters: Option<String>,
         payload: Option<Vec<u8>>,
         encoding: Option<String>,
         attachment: Option<Vec<u8>>,
     ) -> PyResult<ReplyStream> {
-        let replies = self
-            .rt
-            .block_on(self.inner.get(RsQuerierGetArgs {
-                parameters: parameters.unwrap_or_default(),
-                payload: payload.unwrap_or_default(),
-                encoding: encoding.unwrap_or_default(),
-                attachment: attachment.unwrap_or_default(),
-            }))
+        let replies = py
+            .allow_threads(|| {
+                self.rt.block_on(self.inner.get(RsQuerierGetArgs {
+                    parameters: parameters.unwrap_or_default(),
+                    payload: payload.unwrap_or_default(),
+                    encoding: encoding.unwrap_or_default(),
+                    attachment: attachment.unwrap_or_default(),
+                }))
+            })
             .map_err(to_py_err)?;
         Ok(ReplyStream::from_inner(replies))
     }
 
-    fn undeclare(&self) -> PyResult<()> {
-        self.rt.block_on(self.inner.undeclare()).map_err(to_py_err)
+    fn undeclare(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.rt.block_on(self.inner.undeclare()))
+            .map_err(to_py_err)
     }
 }
 

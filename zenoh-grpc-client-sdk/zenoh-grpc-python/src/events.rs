@@ -98,27 +98,11 @@ impl QueryStream {
     pub(crate) fn from_inner(rt: Arc<Runtime>, inner: RsQueryStream) -> Self {
         Self { rt, inner }
     }
-
-    fn next_query(&self) -> PyResult<Query> {
-        match self.inner.recv() {
-            Ok(inner) => Ok(Query::from_inner(self.rt.clone(), inner)),
-            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
-            Err(err) => Err(to_py_err(err)),
-        }
-    }
 }
 
 impl ReplyStream {
     pub(crate) fn from_inner(inner: RsReplyStream) -> Self {
         Self { inner }
-    }
-
-    fn next_reply(&self) -> PyResult<Reply> {
-        match self.inner.recv() {
-            Ok(inner) => Ok(Reply::from_inner(inner)),
-            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
-            Err(err) => Err(to_py_err(err)),
-        }
     }
 }
 
@@ -264,11 +248,12 @@ impl Query {
 
     fn __exit__(
         mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
         _exc_type: Option<&Bound<'_, PyAny>>,
         _exc: Option<&Bound<'_, PyAny>>,
         _tb: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        Query::drop(&mut slf)
+        Query::drop(&mut slf, py)
     }
 
     #[getter]
@@ -309,52 +294,64 @@ impl Query {
     #[pyo3(signature = (key_expr, payload, encoding=None, attachment=None, timestamp=None))]
     fn reply(
         &self,
+        py: Python<'_>,
         key_expr: String,
         payload: Vec<u8>,
         encoding: Option<String>,
         attachment: Option<Vec<u8>>,
         timestamp: Option<String>,
     ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner()?.reply(
+        let query = self.inner()?;
+        py.allow_threads(|| {
+            self.rt.block_on(query.reply(
                 key_expr,
                 payload,
                 encoding.unwrap_or_default(),
                 attachment.unwrap_or_default(),
                 timestamp.unwrap_or_default(),
             ))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
     #[pyo3(signature = (payload, encoding=None))]
-    fn reply_err(&self, payload: Vec<u8>, encoding: Option<String>) -> PyResult<()> {
-        self.rt
-            .block_on(
-                self.inner()?
-                    .reply_err(payload, encoding.unwrap_or_default()),
-            )
-            .map_err(to_py_err)
+    fn reply_err(
+        &self,
+        payload: Vec<u8>,
+        py: Python<'_>,
+        encoding: Option<String>,
+    ) -> PyResult<()> {
+        let query = self.inner()?;
+        py.allow_threads(|| {
+            self.rt
+                .block_on(query.reply_err(payload, encoding.unwrap_or_default()))
+        })
+        .map_err(to_py_err)
     }
 
     #[pyo3(signature = (key_expr, attachment=None, timestamp=None))]
     fn reply_delete(
         &self,
+        py: Python<'_>,
         key_expr: String,
         attachment: Option<Vec<u8>>,
         timestamp: Option<String>,
     ) -> PyResult<()> {
-        self.rt
-            .block_on(self.inner()?.reply_delete(
+        let query = self.inner()?;
+        py.allow_threads(|| {
+            self.rt.block_on(query.reply_delete(
                 key_expr,
                 attachment.unwrap_or_default(),
                 timestamp.unwrap_or_default(),
             ))
-            .map_err(to_py_err)
+        })
+        .map_err(to_py_err)
     }
 
-    fn drop(&mut self) -> PyResult<()> {
+    fn drop(&mut self, py: Python<'_>) -> PyResult<()> {
         let inner = self.take_inner()?;
-        self.rt.block_on(inner.finish()).map_err(to_py_err)
+        py.allow_threads(|| self.rt.block_on(inner.finish()))
+            .map_err(to_py_err)
     }
 }
 
@@ -364,13 +361,16 @@ impl QueryStream {
         slf
     }
 
-    fn __next__(&self) -> PyResult<Query> {
-        self.next_query()
+    fn __next__(&self, py: Python<'_>) -> PyResult<Query> {
+        match py.allow_threads(|| self.inner.recv()) {
+            Ok(inner) => Ok(Query::from_inner(self.rt.clone(), inner)),
+            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
+            Err(err) => Err(to_py_err(err)),
+        }
     }
 
-    fn recv(&self) -> PyResult<Query> {
-        self.inner
-            .recv()
+    fn recv(&self, py: Python<'_>) -> PyResult<Query> {
+        py.allow_threads(|| self.inner.recv())
             .map(|inner| Query::from_inner(self.rt.clone(), inner))
             .map_err(to_py_err)
     }
@@ -397,12 +397,18 @@ impl ReplyStream {
         slf
     }
 
-    fn __next__(&self) -> PyResult<Reply> {
-        self.next_reply()
+    fn __next__(&self, py: Python<'_>) -> PyResult<Reply> {
+        match py.allow_threads(|| self.inner.recv()) {
+            Ok(inner) => Ok(Reply::from_inner(inner)),
+            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
+            Err(err) => Err(to_py_err(err)),
+        }
     }
 
-    fn recv(&self) -> PyResult<Reply> {
-        self.inner.recv().map(Reply::from_inner).map_err(to_py_err)
+    fn recv(&self, py: Python<'_>) -> PyResult<Reply> {
+        py.allow_threads(|| self.inner.recv())
+            .map(Reply::from_inner)
+            .map_err(to_py_err)
     }
 
     fn try_recv(&self) -> PyResult<Option<Reply>> {
