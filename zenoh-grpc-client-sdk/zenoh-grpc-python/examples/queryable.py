@@ -5,7 +5,7 @@ with zenoh_grpc.Session.connect() as session:
     queryable = session.declare_queryable("demo/query/**", callback=None, complete=False, allowed_origin=zenoh_grpc.Locality.ANY)
 
     while True:
-        # not recommended to use recv() in a loop, as it is blocking and will block the main thread, and due to the inner rust implementation, it can not be killed by Ctrl+C. It is better to use a callback to receive samples, as shown in sub_callback.py. But here we just want to show how to use recv() in a loop, so we use it here for simplicity.
+        # not recommended to use recv() in a loop, as it is blocking and will block the main thread, and due to the inner rust implementation, it can not be killed by Ctrl+C. It is better to use a callback to receive samples, as shown in queryable_callback.py. But here we just want to show how to use recv() in a loop, so we use it here for simplicity.
         query = queryable.receiver().recv() # blocking, returns a Query object when a query is received
         print("\nreceived query:", query.query_id, query.selector, query.key_expr, query.parameters, query.payload, query.encoding, query.attachment)
 
