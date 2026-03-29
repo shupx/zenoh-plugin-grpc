@@ -50,8 +50,8 @@ type BoxQueryableStream =
 
 lazy_static::lazy_static! {
     static ref TOKIO_RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .max_blocking_threads(50)
+        .worker_threads(2)  // two many threads may cause performance degradation due to increased context switching, so we set it to 2 for now. We can consider making it configurable in the future if needed.
+        .max_blocking_threads(50) // for spawn_blocking() tasks (cpu heavy tasks that may block the async runtime), increase the max blocking threads to 50 to avoid starvation of async tasks
         .enable_all()
         .build()
         .expect("Unable to create runtime");
