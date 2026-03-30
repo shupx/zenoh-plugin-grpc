@@ -1706,25 +1706,6 @@ impl GrpcQueryable {
 }
 
 impl QuerierInner {
-    fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire) || self.session.is_closed()
-    }
-
-    async fn wait_for_connection_or_closed(&self) -> Option<(Channel, u64)> {
-        loop {
-            if self.is_closed() {
-                return None;
-            }
-            if let Some(connection) = self.session.current_connection().await {
-                return Some(connection);
-            }
-            tokio::select! {
-                _ = self.session.inner.connection_notify.notified() => {}
-                _ = self.close_notify.notified() => return None,
-            }
-        }
-    }
-
     async fn ensure_remote_handle(&self, channel: Channel, generation: u64) -> Result<u64, Status> {
         let mut binding = self.binding.lock().await;
         if let Some(handle) = binding.handle {
@@ -1765,7 +1746,7 @@ impl GrpcQuerier {
     }
 
     pub async fn get(&self, req: QuerierGetArgs) -> Result<ReplyStream, Error> {
-        let Some((channel, generation)) = self.inner.wait_for_connection_or_closed().await else {
+        let Some((channel, generation)) = self.inner.session.current_connection().await else {
             self.inner.session.warn_disconnected_once();
             return Ok(empty_reply_stream());
         };
@@ -2063,6 +2044,29 @@ mod tests {
         let replies = session
             .get(SessionGetArgs {
                 selector: "demo/offline/get".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(replies.is_closed());
+        assert!(replies.recv_async().await.is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn offline_querier_get_returns_closed_empty_stream() {
+        let session = GrpcSession::connect(unreachable_addr()).await.unwrap();
+        let querier = session
+            .declare_querier(DeclareQuerierArgs {
+                key_expr: "demo/offline/query/**".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let replies = querier
+            .get(QuerierGetArgs {
+                parameters: String::new(),
                 ..Default::default()
             })
             .await

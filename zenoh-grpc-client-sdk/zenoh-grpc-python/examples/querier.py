@@ -11,6 +11,8 @@ with zenoh_grpc.Session.connect() as session:
     replies = querier.get(payload=b"hahahaha", encoding="text/plain") # unblocking, returns a ReplyStream
     # the encoding is just a hint for the queryable to know how to parse the payload, it does not affect the actual payload sent to the queryable.
 
+    print("query sent, waiting for replies...")
+
     for reply in replies:
         if reply.ok:
             print("sample:", reply.sample.key_expr, reply.sample.payload, reply.sample.encoding)
