@@ -1,0 +1,28 @@
+set(_zenohgrpcxx_search_paths)
+if(DEFINED CMAKE_LIBRARY_ARCHITECTURE AND NOT CMAKE_LIBRARY_ARCHITECTURE STREQUAL "")
+    list(APPEND _zenohgrpcxx_search_paths "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+endif()
+list(APPEND _zenohgrpcxx_search_paths /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64)
+
+if(NOT TARGET zenoh_grpc::zenohgrpc_c)
+    find_library(_ZENOH_GRPC_C_LIBRARY NAMES zenohgrpc PATHS ${_zenohgrpcxx_search_paths})
+    if(_ZENOH_GRPC_C_LIBRARY)
+        add_library(zenoh_grpc::zenohgrpc_c UNKNOWN IMPORTED)
+        set_target_properties(zenoh_grpc::zenohgrpc_c PROPERTIES
+            IMPORTED_LOCATION "${_ZENOH_GRPC_C_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/include"
+        )
+    endif()
+endif()
+
+if(NOT TARGET zenoh_grpc::zenohgrpcxx)
+    add_library(zenoh_grpc::zenohgrpcxx INTERFACE IMPORTED)
+    set_target_properties(zenoh_grpc::zenohgrpcxx PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/include"
+    )
+    if(TARGET zenoh_grpc::zenohgrpc_c)
+        set_property(TARGET zenoh_grpc::zenohgrpcxx APPEND PROPERTY
+            INTERFACE_LINK_LIBRARIES zenoh_grpc::zenohgrpc_c
+        )
+    endif()
+endif()

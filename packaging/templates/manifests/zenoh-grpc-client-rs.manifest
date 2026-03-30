@@ -1,0 +1,9 @@
+# kind|source|destination|mode
+file|@WORKSPACE_ROOT@/Cargo.toml|/usr/share/zenoh-grpc-client-rs/Cargo.toml|0644
+file|@WORKSPACE_ROOT@/Cargo.lock|/usr/share/zenoh-grpc-client-rs/Cargo.lock|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/zenoh-grpc-client-rs/LICENSE|0644
+dir|@WORKSPACE_ROOT@/zenoh-grpc-proto|/usr/share/zenoh-grpc-client-rs/zenoh-grpc-proto|0755
+dir|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-client-rs|/usr/share/zenoh-grpc-client-rs/zenoh-grpc-client-sdk/zenoh-grpc-client-rs|0755
+file|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-client-rs/README.md|/usr/share/doc/zenoh-grpc-client-rs/README.md|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/doc/zenoh-grpc-client-rs/LICENSE|0644
+file|@GENERATED_DIR@/docs/zenoh-grpc-client-rs/changelog.Debian.gz|/usr/share/doc/zenoh-grpc-client-rs/changelog.Debian.gz|0644

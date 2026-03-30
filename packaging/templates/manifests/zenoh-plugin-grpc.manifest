@@ -1,0 +1,5 @@
+# kind|source|destination|mode
+file|@RUST_RELEASE_DIR@/libzenoh_plugin_grpc.so|/usr/lib/zenoh/plugins/libzenoh_plugin_grpc.so|0755
+file|@WORKSPACE_ROOT@/zenoh-plugin-grpc/README.md|/usr/share/doc/zenoh-plugin-grpc/README.md|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/doc/zenoh-plugin-grpc/LICENSE|0644
+file|@GENERATED_DIR@/docs/zenoh-plugin-grpc/changelog.Debian.gz|/usr/share/doc/zenoh-plugin-grpc/changelog.Debian.gz|0644

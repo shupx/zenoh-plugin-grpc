@@ -1,0 +1,5 @@
+# kind|source|destination|mode
+file|@RUST_RELEASE_DIR@/zenoh-bridge-grpc|/usr/bin/zenoh-bridge-grpc|0755
+file|@WORKSPACE_ROOT@/zenoh-bridge-grpc/README.md|/usr/share/doc/zenoh-bridge-grpc/README.md|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/doc/zenoh-bridge-grpc/LICENSE|0644
+file|@GENERATED_DIR@/docs/zenoh-bridge-grpc/changelog.Debian.gz|/usr/share/doc/zenoh-bridge-grpc/changelog.Debian.gz|0644

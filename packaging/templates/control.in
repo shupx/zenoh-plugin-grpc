@@ -1,0 +1,8 @@
+Package: @PACKAGE_NAME@
+Version: @DEB_VERSION@
+Section: misc
+Priority: optional
+Architecture: @ARCH@
+Maintainer: @MAINTAINER@
+@OPTIONAL_DEPENDS@
+Description: @DESCRIPTION@

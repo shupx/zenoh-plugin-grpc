@@ -9,8 +9,7 @@ use zenoh_plugin_trait::Plugin;
 
 #[derive(Parser, Debug)]
 #[command(name = "zenoh bridge for gRPC")]
-#[command(version = GrpcPlugin::PLUGIN_VERSION)]
-#[command(long_version = GrpcPlugin::PLUGIN_LONG_VERSION)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Args {
     #[arg(short, long, value_name = "HEX_STRING")]
     id: Option<String>,

@@ -1,0 +1,6 @@
+# kind|source|destination|mode
+file|@RUST_RELEASE_DIR@/libzenohgrpc.so|/usr/lib/@DEB_HOST_MULTIARCH@/libzenohgrpc.so|0755
+file|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-c/include/zenoh_grpc.h|/usr/include/zenoh_grpc.h|0644
+file|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-c/README.md|/usr/share/doc/zenoh-grpc-c/README.md|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/doc/zenoh-grpc-c/LICENSE|0644
+file|@GENERATED_DIR@/docs/zenoh-grpc-c/changelog.Debian.gz|/usr/share/doc/zenoh-grpc-c/changelog.Debian.gz|0644

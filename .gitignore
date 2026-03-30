@@ -1,6 +1,8 @@
 # Rust
 /target/
 /build/
+/dist/
+/packaging/.work/
 **/*.rs.bk
 
 # Python

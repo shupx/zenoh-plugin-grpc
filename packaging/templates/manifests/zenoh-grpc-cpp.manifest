@@ -1,0 +1,8 @@
+# kind|source|destination|mode
+dir|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-cpp/include/zenoh_grpc|/usr/include/zenoh_grpc|0755
+file|@GENERATED_DIR@/cmake/zenohgrpcxx/zenohgrpcxxConfig.cmake|/usr/lib/cmake/zenohgrpcxx/zenohgrpcxxConfig.cmake|0644
+file|@GENERATED_DIR@/cmake/zenohgrpcxx/zenohgrpcxxTargets.cmake|/usr/lib/cmake/zenohgrpcxx/zenohgrpcxxTargets.cmake|0644
+file|@GENERATED_DIR@/cmake/zenohgrpcxx/zenohgrpcxxConfigVersion.cmake|/usr/lib/cmake/zenohgrpcxx/zenohgrpcxxConfigVersion.cmake|0644
+file|@WORKSPACE_ROOT@/zenoh-grpc-client-sdk/zenoh-grpc-cpp/README.md|/usr/share/doc/zenoh-grpc-cpp/README.md|0644
+file|@WORKSPACE_ROOT@/LICENSE|/usr/share/doc/zenoh-grpc-cpp/LICENSE|0644
+file|@GENERATED_DIR@/docs/zenoh-grpc-cpp/changelog.Debian.gz|/usr/share/doc/zenoh-grpc-cpp/changelog.Debian.gz|0644
