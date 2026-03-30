@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     tokio::spawn(async move {
-        if let Ok(query) = queryable.receiver()?.recv_async().await {
+        if let Ok(query) = queryable.recv_async().await {
             let _ = query
                 .reply(
                     "demo/query/value",

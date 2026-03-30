@@ -1102,11 +1102,22 @@ mod tests {
         let dynamic_runtime: DynamicRuntime = runtime.clone().into();
         let task = spawn_runtime(run(dynamic_runtime, config, stop.clone()));
 
-        for _ in 0..20 {
-            if GrpcSession::connect(ConnectAddr::Tcp(addr.clone()))
+        for _ in 0..40 {
+            let Ok(channel) = Endpoint::from_shared(format!("http://{addr}"))
+                .unwrap()
+                .connect()
                 .await
-                .is_ok()
-            {
+            else {
+                sleep(Duration::from_millis(50)).await;
+                continue;
+            };
+            let ready = SessionServiceClient::new(channel)
+                .info(pb::SessionInfoRequest {
+                    client_id: format!("probe-{}", uuid::Uuid::new_v4()),
+                })
+                .await
+                .is_ok();
+            if ready {
                 break;
             }
             sleep(Duration::from_millis(50)).await;

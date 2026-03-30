@@ -17,4 +17,4 @@ with zenoh_grpc.Session.connect() as session:
         print("\npublished to demo/example/python:", msg)
         print("publish queue dropped count:", pub.send_dropped_count()) # print the number of dropped messages in publish queue, which can be used to monitor the health of the connection between the publisher and the gRPC server. If the dropped count is increasing, it means the gRPC server can not keep up with the publishing speed, and you may want to reduce the publishing frequency.
 
-        time.sleep(0.01) # gRPC server can only handle 10_000Hz for all clients with no dropped messages on my machine. So do not send messages too fast but send in batch and low frequency, or you will see the dropped count increasing. You can also adjust the sleep time to see how it affects the dropped count.
+        time.sleep(0.5) # gRPC server can only handle 10_000Hz for all clients with no dropped messages on my machine. So do not send messages too fast but send in batch and low frequency, or you will see the dropped count increasing. You can also adjust the sleep time to see how it affects the dropped count.

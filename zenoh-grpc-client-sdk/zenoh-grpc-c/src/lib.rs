@@ -9,9 +9,9 @@ use std::{
 use tokio::runtime::Runtime;
 use zenoh_grpc_client_rs::{
     ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
-    DeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQueryable, GrpcSession, GrpcSubscriber,
-    PublisherDeleteArgs, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs, QueryReplyDeleteArgs,
-    QueryReplyErrArgs, SessionDeleteArgs, SessionPutArgs,
+    DeclareSubscriberArgs, GrpcPublisher, GrpcQuerier, GrpcQuery, GrpcQueryable, GrpcSession,
+    GrpcSubscriber, PublisherDeleteArgs, PublisherPutArgs, QuerierGetArgs, QueryReplyArgs,
+    QueryReplyDeleteArgs, QueryReplyErrArgs, SessionDeleteArgs, SessionPutArgs,
 };
 use zenoh_grpc_proto::v1 as pb;
 
@@ -370,18 +370,18 @@ fn fill_sample(dst: *mut zgrpc_sample_t, sample: &pb::Sample) -> c_int {
     }
 }
 
-fn fill_query(dst: *mut zgrpc_query_t, query: &pb::Query) -> c_int {
+fn fill_query(dst: *mut zgrpc_query_t, query: &GrpcQuery) -> c_int {
     unsafe {
         let Some(dst) = dst.as_mut() else {
             return -1;
         };
-        let mut payload = query.payload.clone();
+        let mut payload = query.payload().to_vec();
         let len = payload.len();
         let ptr = payload.as_mut_ptr();
         std::mem::forget(payload);
-        dst.query_id = query.query_id;
-        dst.key_expr = c_string(query.key_expr.clone());
-        dst.parameters = c_string(query.parameters.clone());
+        dst.query_id = query.query_id();
+        dst.key_expr = c_string(query.key_expr().to_string());
+        dst.parameters = c_string(query.parameters().to_string());
         dst.payload = ptr;
         dst.payload_len = len;
         0
@@ -474,10 +474,7 @@ pub unsafe extern "C" fn zgrpc_queryable_recv(
         return -1;
     };
     match queryable.inner.recv() {
-        Ok(event) => match event.query {
-            Some(query) => fill_query(query_out, &query),
-            None => -1,
-        },
+        Ok(query) => fill_query(query_out, &query),
         Err(_) => -1,
     }
 }

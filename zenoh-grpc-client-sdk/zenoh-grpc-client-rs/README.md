@@ -6,9 +6,15 @@ The public API uses request structs instead of simplified helper overloads, so c
 
 `put/delete/reply*` now use local enqueue semantics: a successful call means the request entered a local bounded queue, not that the remote gRPC server has already processed it. When the local send queue is full, the oldest queued item is dropped.
 
+`GrpcSession::connect` and `declare_*` are local-first: they succeed even if the gRPC server is temporarily offline, then reconnect and bind in the background. During a disconnected period the client prints one yellow warning to stderr and keeps retrying automatically.
+
 Streamed receives (`subscriber`, `queryable`, `session.get`, `querier.get`) also use local bounded queues with drop-oldest behavior, so slow consumers do not backpressure the gRPC stream reader. Use `dropped_count()` on receivers and `send_dropped_count()` on send-capable objects to observe overflow.
 
+`subscriber.recv*` and `queryable.recv*` stay alive across reconnects. `session.get` and `querier.get` are different: if the client is offline when you call them, they return an already-closed empty `ReplyStream` immediately instead of waiting for reconnection.
+
 `declare_subscriber` and `declare_queryable` also accept an optional callback. When present, the object switches to callback-driven mode: a dedicated OS thread drains the local queue in order and invokes the callback sequentially. In that mode, `recv/try_recv/receiver` are no longer available on the object.
+
+For queryables, `reply/reply_err/reply_delete/finish` are retried across short disconnects for the original in-flight query. If the server has already dropped that query, the pending commands are discarded with a warning instead of hanging forever.
 
 ## Build
 
