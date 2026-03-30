@@ -15,7 +15,7 @@ use zenoh_grpc_client_rs::{
 
 use crate::{
     common::{parse_connect_addr, runtime, to_py_err},
-    events::{Query, QueryStream, ReplyStream, SubscriberEvent},
+    events::{Query, ReplyStream, SubscriberEvent},
 };
 
 #[pyclass]
@@ -423,9 +423,42 @@ impl Queryable {
         self.undeclare(py)
     }
 
-    fn receiver(&self) -> PyResult<QueryStream> {
-        let receiver = self.inner.receiver().map_err(to_py_err)?;
-        Ok(QueryStream::from_inner(self.rt.clone(), receiver))
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self, py: Python<'_>) -> PyResult<Query> {
+        match py.allow_threads(|| self.inner.recv()) {
+            Ok(inner) => Ok(Query::from_inner(self.rt.clone(), inner)),
+            Err(err) => {
+                if self.inner.is_closed().unwrap_or(false) {
+                    Err(pyo3::exceptions::PyStopIteration::new_err(err.to_string()))
+                } else {
+                    Err(to_py_err(err))
+                }
+            }
+        }
+    }
+
+    fn recv(&self, py: Python<'_>) -> PyResult<Query> {
+        py.allow_threads(|| self.inner.recv())
+            .map(|inner| Query::from_inner(self.rt.clone(), inner))
+            .map_err(to_py_err)
+    }
+
+    fn try_recv(&self) -> PyResult<Option<Query>> {
+        self.inner
+            .try_recv()
+            .map(|query| query.map(|inner| Query::from_inner(self.rt.clone(), inner)))
+            .map_err(to_py_err)
+    }
+
+    fn dropped_count(&self) -> PyResult<u64> {
+        self.inner.dropped_count().map_err(to_py_err)
+    }
+
+    fn is_closed(&self) -> PyResult<bool> {
+        self.inner.is_closed().map_err(to_py_err)
     }
 
     fn undeclare(&self, py: Python<'_>) -> PyResult<()> {

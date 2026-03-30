@@ -99,12 +99,6 @@ pub struct ReplyStream {
     rx: DropOldestReceiver<pb::Reply>,
 }
 
-#[derive(Clone)]
-pub struct QueryStream {
-    queryable: GrpcQueryable,
-    rx: DropOldestReceiver<pb::QueryableEvent>,
-}
-
 pub struct GrpcQuery {
     queryable: GrpcQueryable,
     inner: pb::Query,
@@ -761,12 +755,44 @@ impl GrpcQueryable {
         self.write_tx.dropped_count()
     }
 
-    pub fn receiver(&self) -> Result<QueryStream, Error> {
+    pub fn recv(&self) -> Result<GrpcQuery, Error> {
         self.ensure_pull_mode()?;
-        Ok(QueryStream {
-            queryable: self.clone(),
-            rx: self.rx.clone(),
-        })
+        let event = self
+            .rx
+            .recv()
+            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
+        self.query_from_event(event)
+    }
+
+    pub fn try_recv(&self) -> Result<Option<GrpcQuery>, Error> {
+        self.ensure_pull_mode()?;
+        match self.rx.try_recv() {
+            Ok(event) => Ok(Some(self.query_from_event(event)?)),
+            Err(flume::TryRecvError::Empty) => Ok(None),
+            Err(flume::TryRecvError::Disconnected) => {
+                Err(tonic::Status::unavailable("query stream closed").into())
+            }
+        }
+    }
+
+    pub async fn recv_async(&self) -> Result<GrpcQuery, Error> {
+        self.ensure_pull_mode()?;
+        let event = self
+            .rx
+            .recv_async()
+            .await
+            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
+        self.query_from_event(event)
+    }
+
+    pub fn dropped_count(&self) -> Result<u64, Error> {
+        self.ensure_pull_mode()?;
+        Ok(self.rx.dropped_count())
+    }
+
+    pub fn is_closed(&self) -> Result<bool, Error> {
+        self.ensure_pull_mode()?;
+        Ok(self.rx.is_disconnected())
     }
 
     pub async fn undeclare(&self) -> Result<(), Error> {
@@ -855,43 +881,6 @@ impl ReplyStream {
             .recv_async()
             .await
             .map_err(|_| tonic::Status::unavailable("reply stream closed").into())
-    }
-
-    pub fn dropped_count(&self) -> u64 {
-        self.rx.dropped_count()
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.rx.is_disconnected()
-    }
-}
-
-impl QueryStream {
-    pub fn recv(&self) -> Result<GrpcQuery, Error> {
-        let event = self
-            .rx
-            .recv()
-            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
-        self.queryable.query_from_event(event)
-    }
-
-    pub fn try_recv(&self) -> Result<Option<GrpcQuery>, Error> {
-        match self.rx.try_recv() {
-            Ok(event) => Ok(Some(self.queryable.query_from_event(event)?)),
-            Err(flume::TryRecvError::Empty) => Ok(None),
-            Err(flume::TryRecvError::Disconnected) => {
-                Err(tonic::Status::unavailable("query stream closed").into())
-            }
-        }
-    }
-
-    pub async fn recv_async(&self) -> Result<GrpcQuery, Error> {
-        let event = self
-            .rx
-            .recv_async()
-            .await
-            .map_err(|_| tonic::Status::unavailable("query stream closed"))?;
-        self.queryable.query_from_event(event)
     }
 
     pub fn dropped_count(&self) -> u64 {

@@ -6,7 +6,7 @@ with zenoh_grpc.Session.connect() as session:
 
     while True:
         # not recommended to use recv() in a loop, as it is blocking and will block the main thread, and due to the inner rust implementation, it can not be killed by Ctrl+C. It is better to use a callback to receive samples, as shown in queryable_callback.py. But here we just want to show how to use recv() in a loop, so we use it here for simplicity.
-        query = queryable.receiver().recv() # blocking, returns a Query object when a query is received
+        query = queryable.recv() # blocking, returns a Query object when a query is received
         print("\nreceived query:", query.query_id, query.selector, query.key_expr, query.parameters, query.payload, query.encoding, query.attachment)
 
         # You can reply multiple times to the same query by calling reply() multiple times. The querier will receive the replies one by one or all at once depending on the consolidation mode set by the querier (AUTO(default,LATEST), NONE(receive one by one), MONOTONIC(time monotonically consolidation), LATEST(only the latest)).

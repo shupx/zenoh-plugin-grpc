@@ -1197,7 +1197,7 @@ mod tests {
             tokio::spawn(async move {
                 let query = timeout(
                     Duration::from_secs(5),
-                    queryable.receiver().unwrap().recv_async(),
+                    queryable.recv_async(),
                 )
                 .await
                 .unwrap()
@@ -1271,7 +1271,7 @@ mod tests {
             tokio::spawn(async move {
                 let query = timeout(
                     Duration::from_secs(5),
-                    queryable.receiver().unwrap().recv_async(),
+                    queryable.recv_async(),
                 )
                 .await
                 .unwrap()
@@ -1339,7 +1339,7 @@ mod tests {
             tokio::spawn(async move {
                 let query = timeout(
                     Duration::from_secs(5),
-                    queryable.receiver().unwrap().recv_async(),
+                    queryable.recv_async(),
                 )
                 .await
                 .unwrap()
@@ -1391,7 +1391,7 @@ mod tests {
             tokio::spawn(async move {
                 let _query = timeout(
                     Duration::from_secs(5),
-                    queryable.receiver().unwrap().recv_async(),
+                    queryable.recv_async(),
                 )
                 .await
                 .unwrap()

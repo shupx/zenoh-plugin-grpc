@@ -6,7 +6,7 @@ use pyo3::{
 };
 use tokio::runtime::Runtime;
 use zenoh_grpc_client_rs::{
-    GrpcQuery as RsGrpcQuery, QueryStream as RsQueryStream, ReplyStream as RsReplyStream,
+    GrpcQuery as RsGrpcQuery, ReplyStream as RsReplyStream,
 };
 use zenoh_grpc_proto::v1 as pb;
 
@@ -40,13 +40,6 @@ pub(crate) struct Reply {
 pub(crate) struct Query {
     rt: Arc<Runtime>,
     inner: Option<RsGrpcQuery>,
-}
-
-#[pyclass]
-#[derive(Clone)]
-pub(crate) struct QueryStream {
-    rt: Arc<Runtime>,
-    inner: RsQueryStream,
 }
 
 #[pyclass]
@@ -91,12 +84,6 @@ impl Query {
         self.inner
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("query already dropped"))
-    }
-}
-
-impl QueryStream {
-    pub(crate) fn from_inner(rt: Arc<Runtime>, inner: RsQueryStream) -> Self {
-        Self { rt, inner }
     }
 }
 
@@ -356,42 +343,6 @@ impl Query {
 }
 
 #[pymethods]
-impl QueryStream {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&self, py: Python<'_>) -> PyResult<Query> {
-        match py.allow_threads(|| self.inner.recv()) {
-            Ok(inner) => Ok(Query::from_inner(self.rt.clone(), inner)),
-            Err(err) if self.inner.is_closed() => Err(PyStopIteration::new_err(err.to_string())),
-            Err(err) => Err(to_py_err(err)),
-        }
-    }
-
-    fn recv(&self, py: Python<'_>) -> PyResult<Query> {
-        py.allow_threads(|| self.inner.recv())
-            .map(|inner| Query::from_inner(self.rt.clone(), inner))
-            .map_err(to_py_err)
-    }
-
-    fn try_recv(&self) -> PyResult<Option<Query>> {
-        self.inner
-            .try_recv()
-            .map(|query| query.map(|inner| Query::from_inner(self.rt.clone(), inner)))
-            .map_err(to_py_err)
-    }
-
-    fn dropped_count(&self) -> u64 {
-        self.inner.dropped_count()
-    }
-
-    fn is_closed(&self) -> bool {
-        self.inner.is_closed()
-    }
-}
-
-#[pymethods]
 impl ReplyStream {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
@@ -433,7 +384,6 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ReplyError>()?;
     module.add_class::<Reply>()?;
     module.add_class::<Query>()?;
-    module.add_class::<QueryStream>()?;
     module.add_class::<ReplyStream>()?;
     Ok(())
 }
