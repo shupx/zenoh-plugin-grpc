@@ -10,33 +10,21 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    zgrpc_querier_options_t opts;
-    zgrpc_querier_options_default(&opts);
+    zgrpc_session_get_options_t opts;
+    zgrpc_session_get_options_default(&opts);
+    opts.payload = (const uint8_t*)"hahaha";
+    opts.payload_len = strlen("hahaha");
     opts.consolidation = ZGRPC_CONSOLIDATION_MODE_NONE;
+    opts.encoding = "text/plain";
     opts.timeout_ms = 3000;
 
-    zgrpc_querier_t* querier = zgrpc_declare_querier_with_options(session, "demo/query/**", &opts);
-    if (querier == NULL) {
-        fprintf(stderr, "failed to declare querier\n");
-        zgrpc_close(session);
-        return 1;
-    }
-
-    zgrpc_querier_get_options_t get_opts;
-    zgrpc_querier_get_options_default(&get_opts);
-    get_opts.payload = (const uint8_t*)"hahahaha";
-    get_opts.payload_len = strlen("hahahaha");
-    get_opts.encoding = "text/plain";
-
-    zgrpc_reply_stream_t* replies = zgrpc_querier_get_stream(querier, "", &get_opts);
+    zgrpc_reply_stream_t* replies = zgrpc_session_get(session, "demo/query/c", &opts);
     if (replies == NULL) {
-        fprintf(stderr, "failed to get replies\n");
-        zgrpc_querier_undeclare(querier);
+        fprintf(stderr, "failed to open session get stream\n");
         zgrpc_close(session);
         return 1;
     }
 
-    printf("query sent, waiting for replies...\n");
     while (1) {
         zgrpc_reply_ex_t reply = {0};
         int rc = zgrpc_reply_stream_try_recv(replies, &reply);
@@ -49,14 +37,12 @@ int main(int argc, char** argv) {
             }
             zgrpc_example_sleep_ms(100);
         } else {
-            fprintf(stderr, "reply stream failed\n");
+            fprintf(stderr, "session get stream failed\n");
             break;
         }
     }
 
-    printf("reply stream dropped=%" PRIu64 "\n", zgrpc_reply_stream_dropped_count(replies));
     zgrpc_reply_stream_drop(replies);
-    zgrpc_querier_undeclare(querier);
     zgrpc_close(session);
     return 0;
 }

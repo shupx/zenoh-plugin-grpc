@@ -5,17 +5,13 @@
 int main(int argc, char** argv) {
     auto session = zenoh_grpc::Session::connect(example_endpoint(argc, argv));
 
-    zenoh_grpc::Session::QuerierOptions options;
+    zenoh_grpc::Session::GetOptions options;
+    options.payload = std::vector<std::uint8_t>{'h', 'a', 'h', 'a', 'h', 'a'};
     options.consolidation = zenoh_grpc::ConsolidationMode::None;
+    options.encoding = "text/plain";
     options.timeout_ms = 3000;
-    auto querier = session.declare_querier("demo/query/**", options);
 
-    zenoh_grpc::Querier::GetOptions get_options;
-    get_options.payload = std::vector<std::uint8_t>{'h', 'a', 'h', 'a', 'h', 'a', 'h', 'a'};
-    get_options.encoding = "text/plain";
-
-    auto replies = querier.get_stream("", get_options);
-    std::cout << "query sent, waiting for replies..." << std::endl;
+    auto replies = session.get("demo/query/c", options);
     while (true) {
         auto reply = replies.try_recv();
         if (reply.has_value()) {
@@ -28,6 +24,5 @@ int main(int argc, char** argv) {
         example_sleep_ms(100);
     }
 
-    std::cout << "reply stream dropped=" << replies.dropped_count() << std::endl;
     return 0;
 }
