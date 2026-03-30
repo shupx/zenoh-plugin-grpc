@@ -1,10 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -392,6 +395,58 @@ class Query {
 
 class ReplyStream {
   public:
+    class Iterator {
+      public:
+        using iterator_category = std::input_iterator_tag;
+        using value_type = Reply;
+        using difference_type = std::ptrdiff_t;
+        using pointer = const Reply*;
+        using reference = const Reply&;
+
+        Iterator() = default;
+        explicit Iterator(const ReplyStream* stream) : stream_(stream) { advance(); }
+
+        reference operator*() const { return *current_; }
+        pointer operator->() const { return &(*current_); }
+
+        Iterator& operator++() {
+            advance();
+            return *this;
+        }
+
+        Iterator operator++(int) {
+            Iterator copy(*this);
+            advance();
+            return copy;
+        }
+
+        bool operator==(const Iterator& other) const {
+            const bool at_end = stream_ == nullptr;
+            const bool other_at_end = other.stream_ == nullptr;
+            if (at_end || other_at_end) {
+                return at_end == other_at_end;
+            }
+            return stream_ == other.stream_;
+        }
+
+        bool operator!=(const Iterator& other) const { return !(*this == other); }
+
+      private:
+        void advance() {
+            if (stream_ == nullptr) {
+                current_.reset();
+                return;
+            }
+            current_ = stream_->next_for_iteration();
+            if (!current_.has_value()) {
+                stream_ = nullptr;
+            }
+        }
+
+        const ReplyStream* stream_ = nullptr;
+        std::optional<Reply> current_;
+    };
+
     ReplyStream() = default;
     explicit ReplyStream(zgrpc_reply_stream_t* inner) : inner_(inner) {}
     ReplyStream(ReplyStream&& other) noexcept : inner_(other.inner_) { other.inner_ = nullptr; }
@@ -428,7 +483,24 @@ class ReplyStream {
     std::uint64_t dropped_count() const { return zgrpc_reply_stream_dropped_count(inner_); }
     bool is_closed() const { return zgrpc_reply_stream_is_closed(inner_) != 0; }
 
+    Iterator begin() const { return Iterator(this); }
+    Iterator end() const { return Iterator(); }
+
   private:
+    std::optional<Reply> next_for_iteration() const {
+        while (valid()) {
+            auto reply = try_recv();
+            if (reply.has_value()) {
+                return reply;
+            }
+            if (is_closed()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return std::nullopt;
+    }
+
     void reset() {
         if (inner_ != nullptr) {
             zgrpc_reply_stream_drop(inner_);

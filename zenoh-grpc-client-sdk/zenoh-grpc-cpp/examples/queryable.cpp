@@ -34,6 +34,8 @@ int main(int argc, char** argv) {
                     std::vector<std::uint8_t>(reply2.begin(), reply2.end()),
                     reply_options);
         std::cout << "reply 2 sent" << std::endl;
+        
+        // The query will be automatically finished when the Query object is destructed, but we can also finish it explicitly here.
         query.finish();
     }
 

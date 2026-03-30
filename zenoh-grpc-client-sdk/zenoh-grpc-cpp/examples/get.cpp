@@ -12,16 +12,8 @@ int main(int argc, char** argv) {
     options.timeout_ms = 3000;
 
     auto replies = session.get("demo/query/c", options);
-    while (true) {
-        auto reply = replies.try_recv();
-        if (reply.has_value()) {
-            print_reply(*reply);
-            continue;
-        }
-        if (replies.is_closed()) {
-            break;
-        }
-        example_sleep_ms(100);
+    for (const auto& reply : replies) {
+        print_reply(reply);
     }
 
     return 0;

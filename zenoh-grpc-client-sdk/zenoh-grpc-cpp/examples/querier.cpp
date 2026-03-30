@@ -16,16 +16,8 @@ int main(int argc, char** argv) {
 
     auto replies = querier.get_stream("", get_options);
     std::cout << "query sent, waiting for replies..." << std::endl;
-    while (true) {
-        auto reply = replies.try_recv();
-        if (reply.has_value()) {
-            print_reply(*reply);
-            continue;
-        }
-        if (replies.is_closed()) {
-            break;
-        }
-        example_sleep_ms(100);
+    for (const auto& reply : replies) {
+        print_reply(reply);
     }
 
     std::cout << "reply stream dropped=" << replies.dropped_count() << std::endl;
