@@ -135,6 +135,10 @@ message CleanupClientRequest {
   string client_id = 1;
 }
 
+message TouchClientRequest {
+  string client_id = 1;
+}
+
 message DeclarePublisherRequest {
   string client_id = 1;
   string key_expr = 2;
@@ -269,6 +273,7 @@ service SessionService {
   rpc Put(SessionPutRequest) returns (Empty);
   rpc Delete(SessionDeleteRequest) returns (Empty);
   rpc Get(SessionGetRequest) returns (stream Reply);
+  rpc TouchClient(TouchClientRequest) returns (Empty);
   rpc CleanupClient(CleanupClientRequest) returns (Empty);
 }
 

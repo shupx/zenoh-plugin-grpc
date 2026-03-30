@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use async_stream::try_stream;
@@ -148,6 +148,7 @@ struct PluginState {
     session: zenoh::Session,
     next_handle: AtomicU64,
     next_query_id: AtomicU64,
+    live_clients: Mutex<HashMap<String, Instant>>,
     publishers: RwLock<HashMap<u64, PublisherEntry>>,
     subscribers: RwLock<HashMap<u64, SubscriberEntry>>,
     queryables: RwLock<HashMap<u64, QueryableEntry>>,
@@ -162,6 +163,7 @@ impl PluginState {
             session,
             next_handle: AtomicU64::new(1),
             next_query_id: AtomicU64::new(1),
+            live_clients: Mutex::new(HashMap::new()),
             publishers: RwLock::new(HashMap::new()),
             subscribers: RwLock::new(HashMap::new()),
             queryables: RwLock::new(HashMap::new()),
@@ -179,7 +181,29 @@ impl PluginState {
         self.next_query_id.fetch_add(1, Ordering::Relaxed)
     }
 
+    async fn touch_client(&self, client_id: &str) {
+        self.live_clients
+            .lock()
+            .await
+            .insert(client_id.to_string(), Instant::now());
+    }
+
+    async fn collect_stale_clients(&self) -> Vec<String> {
+        let lease = self.config.client_lease_duration;
+        let now = Instant::now();
+        self.live_clients
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(client_id, last_seen)| {
+                (now.saturating_duration_since(*last_seen) >= lease).then_some(client_id.clone())
+            })
+            .collect()
+    }
+
     async fn cleanup_client(&self, client_id: &str) {
+        self.live_clients.lock().await.remove(client_id);
+
         let publisher_handles: Vec<u64> = self
             .publishers
             .read()
@@ -251,6 +275,10 @@ struct GrpcServer {
 impl GrpcServer {
     fn new(state: Arc<PluginState>) -> Self {
         Self { state }
+    }
+
+    async fn touch_client_id(&self, client_id: &str) {
+        self.state.touch_client(client_id).await;
     }
 }
 
@@ -362,8 +390,9 @@ fn encode_reply(reply: Reply) -> pb::Reply {
 impl SessionService for GrpcServer {
     async fn info(
         &self,
-        _request: Request<pb::SessionInfoRequest>,
+        request: Request<pb::SessionInfoRequest>,
     ) -> Result<Response<pb::SessionInfoReply>, Status> {
+        self.touch_client_id(&request.get_ref().client_id).await;
         Ok(Response::new(pb::SessionInfoReply {
             zid: self.state.session.zid().to_string(),
         }))
@@ -374,6 +403,7 @@ impl SessionService for GrpcServer {
         request: Request<pb::SessionPutRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut builder = self.state.session.put(req.key_expr, req.payload);
         builder = builder
             .encoding(Encoding::from(req.encoding))
@@ -393,6 +423,7 @@ impl SessionService for GrpcServer {
         request: Request<pb::SessionDeleteRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut builder = self.state.session.delete(req.key_expr);
         builder = builder
             .congestion_control(map_congestion_control(req.congestion_control))
@@ -413,6 +444,7 @@ impl SessionService for GrpcServer {
         request: Request<pb::SessionGetRequest>,
     ) -> Result<Response<Self::GetStream>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut builder = self.state.session.get(req.selector);
         builder = builder
             .target(map_query_target(req.target))
@@ -438,6 +470,14 @@ impl SessionService for GrpcServer {
         Ok(Response::new(Box::pin(stream)))
     }
 
+    async fn touch_client(
+        &self,
+        request: Request<pb::TouchClientRequest>,
+    ) -> Result<Response<pb::Empty>, Status> {
+        self.touch_client_id(&request.into_inner().client_id).await;
+        Ok(Response::new(pb::Empty {}))
+    }
+
     async fn cleanup_client(
         &self,
         request: Request<pb::CleanupClientRequest>,
@@ -456,6 +496,7 @@ impl PublisherService for GrpcServer {
         request: Request<pb::DeclarePublisherRequest>,
     ) -> Result<Response<pb::HandleReply>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let handle = self.state.alloc_handle();
         let publisher = self
             .state
@@ -484,6 +525,7 @@ impl PublisherService for GrpcServer {
         request: Request<pb::PublisherPutRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let publishers = self.state.publishers.read().await;
         let entry = publishers
             .get(&req.handle)
@@ -505,6 +547,7 @@ impl PublisherService for GrpcServer {
         request: Request<pb::PublisherDeleteRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let publishers = self.state.publishers.read().await;
         let entry = publishers
             .get(&req.handle)
@@ -523,6 +566,7 @@ impl PublisherService for GrpcServer {
         request: Request<pb::UndeclareRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let entry = self
             .state
             .publishers
@@ -543,6 +587,7 @@ impl SubscriberService for GrpcServer {
         request: Request<pb::DeclareSubscriberRequest>,
     ) -> Result<Response<pb::HandleReply>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let handle = self.state.alloc_handle();
         let subscriber = self
             .state
@@ -580,6 +625,7 @@ impl SubscriberService for GrpcServer {
         request: Request<pb::SubscriberEventsRequest>,
     ) -> Result<Response<Self::EventsStream>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let subscribers = self.state.subscribers.read().await;
         let entry = subscribers
             .get(&req.handle)
@@ -595,6 +641,7 @@ impl SubscriberService for GrpcServer {
         request: Request<pb::UndeclareRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let entry = self
             .state
             .subscribers
@@ -619,6 +666,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::DeclareQueryableRequest>,
     ) -> Result<Response<pb::HandleReply>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let handle = self.state.alloc_handle();
         let queryable = self
             .state
@@ -691,6 +739,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::QueryableEventsRequest>,
     ) -> Result<Response<Self::EventsStream>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let queryables = self.state.queryables.read().await;
         let entry = queryables
             .get(&req.handle)
@@ -706,6 +755,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::QueryReplyRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut inflight = self.state.inflight_queries.lock().await;
         let query = inflight
             .get_mut(&req.query_id)
@@ -732,6 +782,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::QueryReplyErrRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut inflight = self.state.inflight_queries.lock().await;
         let query = inflight
             .get_mut(&req.query_id)
@@ -755,6 +806,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::QueryReplyDeleteRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut inflight = self.state.inflight_queries.lock().await;
         let query = inflight
             .get_mut(&req.query_id)
@@ -778,6 +830,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::QueryFinishRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let mut inflight = self.state.inflight_queries.lock().await;
         let query = inflight
             .get(&req.query_id)
@@ -797,6 +850,7 @@ impl QueryableService for GrpcServer {
         request: Request<pb::UndeclareRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let entry = self
             .state
             .queryables
@@ -822,6 +876,7 @@ impl QuerierService for GrpcServer {
         request: Request<pb::DeclareQuerierRequest>,
     ) -> Result<Response<pb::HandleReply>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let handle = self.state.alloc_handle();
         let querier = self
             .state
@@ -854,6 +909,7 @@ impl QuerierService for GrpcServer {
         request: Request<pb::QuerierGetRequest>,
     ) -> Result<Response<Self::GetStream>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let queriers = self.state.queriers.read().await;
         let entry = queriers
             .get(&req.handle)
@@ -883,6 +939,7 @@ impl QuerierService for GrpcServer {
         request: Request<pb::UndeclareRequest>,
     ) -> Result<Response<pb::Empty>, Status> {
         let req = request.into_inner();
+        self.touch_client_id(&req.client_id).await;
         let entry = self
             .state
             .queriers
@@ -915,6 +972,25 @@ async fn run(runtime: DynamicRuntime, config: Config, stop: Arc<Notify>) {
     };
 
     let mut tasks = Vec::new();
+    {
+        let stop = stop.clone();
+        let state = state.clone();
+        let cleanup_interval = config.client_cleanup_interval;
+        tasks.push(spawn_runtime(async move {
+            let mut ticker = tokio::time::interval(cleanup_interval);
+            loop {
+                tokio::select! {
+                    _ = stop.notified() => break,
+                    _ = ticker.tick() => {
+                        for client_id in state.collect_stale_clients().await {
+                            warn!("cleaning up stale grpc client `{client_id}`");
+                            state.cleanup_client(&client_id).await;
+                        }
+                    }
+                }
+            }
+        }));
+    }
     for listener in listeners {
         let stop = stop.clone();
         let service = service.clone();
@@ -972,6 +1048,7 @@ mod tests {
     use std::net::TcpListener as StdTcpListener;
 
     use tokio::time::{sleep, timeout};
+    use tonic::transport::Endpoint;
     use zenoh::{
         config::Config as ZenohConfig,
         internal::runtime::{DynamicRuntime, Runtime, RuntimeBuilder},
@@ -979,6 +1056,10 @@ mod tests {
     use zenoh_grpc_client_rs::{
         ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
         DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, SessionGetArgs,
+    };
+    use zenoh_grpc_proto::v1::{
+        publisher_service_client::PublisherServiceClient,
+        session_service_client::SessionServiceClient,
     };
 
     struct TestHarness {
@@ -1003,6 +1084,10 @@ mod tests {
     }
 
     async fn start_harness() -> TestHarness {
+        start_harness_with_config(Config::default()).await
+    }
+
+    async fn start_harness_with_config(mut config: Config) -> TestHarness {
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
         let mut runtime = RuntimeBuilder::new(ZenohConfig::default())
@@ -1011,11 +1096,9 @@ mod tests {
             .unwrap();
         runtime.start().await.unwrap();
         let stop = Arc::new(Notify::new());
-        let config = Config {
-            host: "127.0.0.1".into(),
-            port,
-            ..Config::default()
-        };
+        config.host = "127.0.0.1".into();
+        config.port = port;
+        config.uds_path = None;
         let dynamic_runtime: DynamicRuntime = runtime.clone().into();
         let task = spawn_runtime(run(dynamic_runtime, config, stop.clone()));
 
@@ -1332,5 +1415,60 @@ mod tests {
         assert!(err.to_string().contains("reply stream closed"));
 
         queryable_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stale_client_is_cleaned_up() {
+        let harness = start_harness_with_config(Config {
+            client_lease_duration: Duration::from_millis(200),
+            client_cleanup_interval: Duration::from_millis(50),
+            ..Config::default()
+        })
+        .await;
+
+        let channel = Endpoint::from_shared(format!("http://{}", harness.addr))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let client_id = format!("stale-{}", uuid::Uuid::new_v4());
+
+        SessionServiceClient::new(channel.clone())
+            .touch_client(pb::TouchClientRequest {
+                client_id: client_id.clone(),
+            })
+            .await
+            .unwrap();
+
+        let handle = PublisherServiceClient::new(channel.clone())
+            .declare_publisher(pb::DeclarePublisherRequest {
+                client_id: client_id.clone(),
+                key_expr: "demo/stale/value".into(),
+                encoding: String::new(),
+                congestion_control: pb::CongestionControl::Unspecified as i32,
+                priority: pb::Priority::Unspecified as i32,
+                express: false,
+                reliability: pb::Reliability::Unspecified as i32,
+                allowed_destination: pb::Locality::Unspecified as i32,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .handle;
+
+        sleep(Duration::from_millis(500)).await;
+
+        let err = PublisherServiceClient::new(channel)
+            .put(pb::PublisherPutRequest {
+                client_id,
+                handle,
+                payload: b"stale".to_vec(),
+                encoding: String::new(),
+                attachment: Vec::new(),
+                timestamp: String::new(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 }

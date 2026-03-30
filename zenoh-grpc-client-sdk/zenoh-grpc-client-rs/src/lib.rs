@@ -6,14 +6,15 @@ use std::{
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Weak,
     },
     thread,
+    time::Duration,
 };
 
 use hyper_util::rt::TokioIo;
 use thiserror::Error;
-use tokio::net::UnixStream;
+use tokio::{net::UnixStream, sync::Notify};
 use tonic::transport::{Channel, Endpoint};
 use tower::service_fn;
 use uuid::Uuid;
@@ -50,10 +51,11 @@ pub enum Error {
     CallbackDriven { kind: &'static str },
 }
 
-#[derive(Clone)]
 struct Inner {
     channel: Channel,
     client_id: String,
+    closed: AtomicBool,
+    heartbeat_stop: Notify,
 }
 
 #[derive(Clone)]
@@ -137,6 +139,7 @@ enum ConsumerMode {
 
 const SEND_QUEUE_CAPACITY: usize = 256;
 const RECV_QUEUE_CAPACITY: usize = 256;
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2); // Should be less than client_lease_duration to ensure timely cleanup of dead clients
 
 fn spawn_subscriber_callback_dispatcher(
     rx: DropOldestReceiver<pb::SubscriberEvent>,
@@ -199,10 +202,13 @@ impl GrpcSession {
         let inner = Arc::new(Inner {
             channel,
             client_id: Uuid::new_v4().to_string(),
+            closed: AtomicBool::new(false),
+            heartbeat_stop: Notify::new(),
         });
         let (write_tx, write_rx) = bounded_drop_oldest(SEND_QUEUE_CAPACITY);
         let session = Self { inner, write_tx };
         session.spawn_session_worker(write_rx);
+        session.spawn_heartbeat_worker();
         Ok(session)
     }
 
@@ -224,6 +230,37 @@ impl GrpcSession {
 
     fn querier_client(&self) -> QuerierServiceClient<Channel> {
         QuerierServiceClient::new(self.inner.channel.clone())
+    }
+
+    fn spawn_heartbeat_worker(&self) {
+        let channel = self.inner.channel.clone();
+        let client_id = self.inner.client_id.clone();
+        let inner = Arc::downgrade(&self.inner);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = async {
+                        if let Some(inner) = Weak::upgrade(&inner) {
+                            inner.heartbeat_stop.notified().await;
+                        }
+                    } => break,
+                }
+
+                let Some(inner) = Weak::upgrade(&inner) else {
+                    break;
+                };
+                if inner.closed.load(Ordering::Acquire) {
+                    break;
+                }
+                let _ = SessionServiceClient::new(channel.clone())
+                    .touch_client(pb::TouchClientRequest {
+                        client_id: client_id.clone(),
+                    })
+                    .await;
+            }
+        });
     }
 
     fn spawn_session_worker(&self, rx: DropOldestReceiver<SessionCommand>) {
@@ -326,6 +363,8 @@ impl GrpcSession {
     }
 
     pub async fn cleanup(&self) -> Result<(), Error> {
+        self.inner.closed.store(true, Ordering::Release);
+        self.inner.heartbeat_stop.notify_waiters();
         self.write_tx.wait_empty().await;
         self.session_client()
             .cleanup_client(pb::CleanupClientRequest {
@@ -488,6 +527,8 @@ impl GrpcSession {
 impl Drop for GrpcSession {
     fn drop(&mut self) {
         if Arc::strong_count(&self.inner) == 1 {
+            self.inner.closed.store(true, Ordering::Release);
+            self.inner.heartbeat_stop.notify_waiters();
             let channel = self.inner.channel.clone();
             let client_id = self.inner.client_id.clone();
             let cleanup = async move {

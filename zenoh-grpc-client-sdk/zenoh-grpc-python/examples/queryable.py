@@ -9,7 +9,7 @@ with zenoh_grpc.Session.connect() as session:
         query = queryable.receiver().recv() # blocking, returns a Query object when a query is received
         print("\nreceived query:", query.query_id, query.selector, query.key_expr, query.parameters, query.payload, query.encoding, query.attachment)
 
-        # You can reply multiple times to the same query by calling reply() multiple times. The querier will receive the replies one by one or all at once depending on the consolidation mode set by the querier (AUTO(default,LATEST), NONE(receive one by one), MONOTONIC(monotonically consolidation), LATEST(only the latest)).
+        # You can reply multiple times to the same query by calling reply() multiple times. The querier will receive the replies one by one or all at once depending on the consolidation mode set by the querier (AUTO(default,LATEST), NONE(receive one by one), MONOTONIC(time monotonically consolidation), LATEST(only the latest)).
 
         query.reply(query.key_expr, b"this is a reply1 from queryable", encoding="text/plain")
         print("reply 1 to query:", query.query_id)

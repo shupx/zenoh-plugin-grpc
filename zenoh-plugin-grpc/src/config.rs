@@ -9,6 +9,8 @@ pub const DEFAULT_UDS_PATH: &str = "/tmp/zenoh-grpc.sock";
 pub const DEFAULT_MAX_RECV_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 pub const DEFAULT_MAX_SEND_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 pub const DEFAULT_SHUTDOWN_GRACE_PERIOD_MS: u64 = 3_000;
+pub const DEFAULT_CLIENT_LEASE_DURATION_MS: u64 = 4_000;
+pub const DEFAULT_CLIENT_CLEANUP_INTERVAL_MS: u64 = 3_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +32,16 @@ pub struct Config {
         deserialize_with = "deserialize_duration_ms"
     )]
     pub shutdown_grace_period: Duration,
+    #[serde(
+        default = "default_client_lease_duration",
+        deserialize_with = "deserialize_duration_ms"
+    )]
+    pub client_lease_duration: Duration,
+    #[serde(
+        default = "default_client_cleanup_interval",
+        deserialize_with = "deserialize_duration_ms"
+    )]
+    pub client_cleanup_interval: Duration,
     #[serde(default, deserialize_with = "deserialize_path")]
     pub __path__: Option<Vec<String>>,
     #[serde(default)]
@@ -54,6 +66,8 @@ impl Default for Config {
             max_recv_message_size: default_max_recv_message_size(),
             max_send_message_size: default_max_send_message_size(),
             shutdown_grace_period: Duration::from_millis(default_shutdown_grace_period_ms()),
+            client_lease_duration: Duration::from_millis(default_client_lease_duration_ms()),
+            client_cleanup_interval: Duration::from_millis(default_client_cleanup_interval_ms()),
             __path__: None,
             __required__: None,
             __config__: None,
@@ -108,6 +122,22 @@ fn default_shutdown_grace_period_ms() -> u64 {
 
 fn default_shutdown_grace_period() -> Duration {
     Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_PERIOD_MS)
+}
+
+fn default_client_lease_duration_ms() -> u64 {
+    DEFAULT_CLIENT_LEASE_DURATION_MS
+}
+
+fn default_client_lease_duration() -> Duration {
+    Duration::from_millis(DEFAULT_CLIENT_LEASE_DURATION_MS)
+}
+
+fn default_client_cleanup_interval_ms() -> u64 {
+    DEFAULT_CLIENT_CLEANUP_INTERVAL_MS
+}
+
+fn default_client_cleanup_interval() -> Duration {
+    Duration::from_millis(DEFAULT_CLIENT_CLEANUP_INTERVAL_MS)
 }
 
 fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
