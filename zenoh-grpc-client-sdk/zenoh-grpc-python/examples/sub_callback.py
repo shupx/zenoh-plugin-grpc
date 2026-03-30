@@ -9,6 +9,7 @@ with zenoh_grpc.Session.connect() as session:
         # print("dropped count:", sub.dropped_count())
         # time.sleep(1) # do not sleep here, just for testing the dropped count
 
-    sub = session.declare_subscriber("demo/example/**", on_sample)
-    # sub = session.declare_subscriber("demo/example/**", on_sample, allowed_origin=zenoh_grpc.Locality.ANY)
+    sub = session.declare_subscriber("demo/example/**", 
+                                     callback=on_sample,
+                                     allowed_origin=zenoh_grpc.Locality.ANY) # optional, default is ANY
     time.sleep(1000)

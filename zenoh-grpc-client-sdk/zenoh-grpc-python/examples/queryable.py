@@ -2,7 +2,10 @@ import zenoh_grpc
 import time
 
 with zenoh_grpc.Session.connect() as session:
-    queryable = session.declare_queryable("demo/query/**", callback=None, complete=False, allowed_origin=zenoh_grpc.Locality.ANY)
+    queryable = session.declare_queryable("demo/query/**", 
+                                          callback=None, # if None, you can use recv() to receive queries in a loop, but it is blocking and not recommended. It is better to use a callback to receive queries, as shown in queryable_callback.py.
+                                          complete=False,  # optional, default is False. 
+                                          allowed_origin=zenoh_grpc.Locality.ANY) # optional, default is ANY.
 
     while True:
         # not recommended to use recv() in a loop, as it is blocking and will block the main thread, and due to the inner rust implementation, it can not be killed by Ctrl+C. It is better to use a callback to receive samples, as shown in queryable_callback.py. But here we just want to show how to use recv() in a loop, so we use it here for simplicity.

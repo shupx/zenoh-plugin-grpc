@@ -18,7 +18,10 @@ with zenoh_grpc.Session.connect() as session:
             # Notice: you should explicitly drop() after you finished replying to send ResponseFinal message to querier, otherwise the querier will wait until timeout and will not receive the replies until then.
             query.drop()
 
-    queryable = session.declare_queryable("demo/query/**", callback=on_query, complete=False, allowed_origin=zenoh_grpc.Locality.ANY) 
+    queryable = session.declare_queryable("demo/query/**", 
+                                          callback=on_query, 
+                                          complete=False, # optional, default is False.
+                                          allowed_origin=zenoh_grpc.Locality.ANY) # optional, default is ANY
     # this auto spawns a separate thread to handle query callbacks, so that the callback can reply to queries in time without blocking the main thread. But the callbacks all share the same thread, so they are executed sequentially. 
    
     time.sleep(1000)
