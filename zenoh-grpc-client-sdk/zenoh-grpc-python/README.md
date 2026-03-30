@@ -16,6 +16,12 @@ Or build a wheel:
 maturin build
 ```
 
+Or simply pip install:
+
+```bash
+pip install -e .
+```
+
 ## Start A Server First
 
 Use either:

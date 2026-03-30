@@ -1,4 +1,10 @@
-from typing import Callable, ClassVar, Iterator, Optional
+from types import TracebackType
+from typing import Callable, ClassVar, Iterator, List, Optional, Type
+
+__all__: List[str]
+
+SubscriberCallback = Callable[["SubscriberEvent"], object]
+QueryableCallback = Callable[["Query"], object]
 
 
 class SampleKind:
@@ -110,7 +116,12 @@ class Reply:
 
 class Query:
     def __enter__(self) -> "Query": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     @property
     def query_id(self) -> int: ...
     @property
@@ -156,7 +167,12 @@ class Session:
     @staticmethod
     def connect(endpoint: str = "unix:///tmp/zenoh-grpc.sock") -> "Session": ...
     def __enter__(self) -> "Session": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     def info(self) -> str: ...
     def close(self) -> None: ...
     def put(
@@ -205,13 +221,13 @@ class Session:
     def declare_subscriber(
         self,
         key_expr: str,
-        callback: Optional[Callable[[SubscriberEvent], object]] = ...,
+        callback: Optional[SubscriberCallback] = ...,
         allowed_origin: Optional[int] = ...,
     ) -> "Subscriber": ...
     def declare_queryable(
         self,
         key_expr: str,
-        callback: Optional[Callable[[Query], object]] = ...,
+        callback: Optional[QueryableCallback] = ...,
         complete: bool = ...,
         allowed_origin: Optional[int] = ...,
     ) -> "Queryable": ...
@@ -227,7 +243,12 @@ class Session:
 
 class Publisher:
     def __enter__(self) -> "Publisher": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     def put(
         self,
         payload: bytes,
@@ -246,7 +267,12 @@ class Publisher:
 
 class Subscriber:
     def __enter__(self) -> "Subscriber": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     def recv(self) -> SubscriberEvent: ...
     def try_recv(self) -> Optional[SubscriberEvent]: ...
     def undeclare(self) -> None: ...
@@ -255,7 +281,12 @@ class Subscriber:
 
 class Queryable(Iterator[Query]):
     def __enter__(self) -> "Queryable": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     def __iter__(self) -> "Queryable": ...
     def __next__(self) -> Query: ...
     def recv(self) -> Query: ...
@@ -268,7 +299,12 @@ class Queryable(Iterator[Query]):
 
 class Querier:
     def __enter__(self) -> "Querier": ...
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None: ...
     def get(
         self,
         parameters: Optional[str] = ...,
@@ -277,4 +313,3 @@ class Querier:
         attachment: Optional[bytes] = ...,
     ) -> ReplyStream: ...
     def undeclare(self) -> None: ...
-
