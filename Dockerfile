@@ -1,13 +1,10 @@
-# syntax=docker/dockerfile:1.7
-
-FROM --platform=$TARGETPLATFORM ubuntu:20.04
+FROM ubuntu:20.04
 
 USER root
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static \
     RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup \
-    CARGO_TARGET_DIR=/opt/zenoh-target \
     PYO3_PYTHON=/usr/bin/python3 \
     PATH=/root/.cargo/bin:${PATH}
 
@@ -32,6 +29,13 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# # 配置 Git 代理以加速依赖下载
+# RUN git config --global url."https://gh-proxy.org/https://github.com/".insteadOf "https://github.com/" && git config --global fetch.depth 1
+
+# 配置 Cargo 使用 Git 命令行工具进行依赖下载，以利用 Git 代理配置
+RUN mkdir -p /root/.cargo \
+    && printf '%s\n%s\n' '[net]' 'git-fetch-with-cli = true' > /root/.cargo/config.toml 
+
 # Copy manifest files first so dependency resolution can be cached independently
 # from day-to-day source edits.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml LICENSE ./
@@ -48,29 +52,19 @@ RUN mkdir -p zenoh-grpc-proto/src \
     && mkdir -p zenoh-grpc-client-sdk/zenoh-grpc-client-rs/src \
     && mkdir -p zenoh-grpc-client-sdk/zenoh-grpc-c/src \
     && mkdir -p zenoh-grpc-client-sdk/zenoh-grpc-python/src \
-    && cat <<'EOF' > zenoh-grpc-proto/src/lib.rs
-pub fn cargo_cache_probe() {}
-EOF
-RUN cat <<'EOF' > zenoh-plugin-grpc/src/lib.rs
-pub fn cargo_cache_probe() {}
-EOF
-RUN cat <<'EOF' > zenoh-bridge-grpc/src/main.rs
-fn main() {}
-EOF
-RUN cat <<'EOF' > zenoh-grpc-client-sdk/zenoh-grpc-client-rs/src/lib.rs
-pub fn cargo_cache_probe() {}
-EOF
-RUN cat <<'EOF' > zenoh-grpc-client-sdk/zenoh-grpc-c/src/lib.rs
-pub fn cargo_cache_probe() {}
-EOF
-RUN cat <<'EOF' > zenoh-grpc-client-sdk/zenoh-grpc-python/src/lib.rs
-pub fn cargo_cache_probe() {}
-EOF
-RUN cargo build --workspace --release --locked
+    && printf '%s\n' 'pub fn cargo_cache_probe() {}' > zenoh-grpc-proto/src/lib.rs \
+    && printf '%s\n' 'pub fn cargo_cache_probe() {}' > zenoh-plugin-grpc/src/lib.rs \
+    && printf '%s\n' 'fn main() {}' > zenoh-bridge-grpc/src/main.rs \
+    && printf '%s\n' 'pub fn cargo_cache_probe() {}' > zenoh-grpc-client-sdk/zenoh-grpc-client-rs/src/lib.rs \
+    && printf '%s\n' 'pub fn cargo_cache_probe() {}' > zenoh-grpc-client-sdk/zenoh-grpc-c/src/lib.rs \
+    && printf '%s\n' 'pub fn cargo_cache_probe() {}' > zenoh-grpc-client-sdk/zenoh-grpc-python/src/lib.rs
+RUN cargo fetch --locked
 
-# The previous layer warms registry/git downloads plus most third-party build
-# artifacts without baking the real project sources into the image cache.
+# The previous layer warms registry and git dependency downloads without
+# compiling the workspace.
 
-COPY . .
+# 设置环境变量，确保后续构建可以复用缓存
+ENV CARGO_HOME=/root/.cargo
+ENV RUSTUP_HOME=/root/.rustup
 
 CMD ["bash"]

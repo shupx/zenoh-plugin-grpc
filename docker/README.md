@@ -32,15 +32,15 @@ The image pre-installs:
 It also pre-runs:
 
 ```bash
-cargo build --workspace --release --locked
+cargo fetch --locked
 ```
 
-This warm-up build is done against minimal placeholder sources for the local workspace crates,
-so the image caches registry/git dependencies and most third-party compilation work without
-baking the full repository sources into the image itself.
+This warm-up step is done against minimal placeholder sources for the local workspace crates,
+so the image caches registry and git dependencies without baking the full repository sources
+or release build artifacts into the image itself.
 
-To maximize reuse of the baked dependency cache in CI, keep `CARGO_TARGET_DIR=/opt/zenoh-target`
-inside the container when running `cargo` or `packaging/scripts/build-all.sh`.
+The main reusable cache lives under `/root/.cargo`, including crates.io downloads and git
+dependencies such as the pinned `zenoh` repository checkout.
 
 Run CI against the checked-out repository mounted into the container so packaging scripts
 can still read the live `.git` metadata used for version generation.
