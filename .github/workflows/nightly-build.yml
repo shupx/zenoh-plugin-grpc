@@ -1,0 +1,229 @@
+name: nightly-build
+
+on:
+  schedule:
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-build
+  cancel-in-progress: false
+
+jobs:
+  check-changes:
+    name: Check nightly source changes
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.release-check.outputs.should_build }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+      build_seq: ${{ steps.meta.outputs.build_seq }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Compute build metadata
+        id: meta
+        shell: bash
+        run: |
+          echo "build_date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "build_seq=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Compare against existing nightly release
+        id: release-check
+        uses: actions/github-script@v7
+        env:
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+        with:
+          script: |
+            const tag = 'nightly';
+            const marker = '<!-- nightly-source-sha:';
+            let shouldBuild = true;
+
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+
+              const body = release.body || '';
+              const match = body.match(/<!-- nightly-source-sha:\s*([0-9a-f]{40})\s*-->/i);
+              const lastSha = match ? match[1] : '';
+
+              core.info(`Current HEAD: ${process.env.HEAD_SHA}`);
+              core.info(`Nightly release SHA: ${lastSha || 'not found'}`);
+
+              if (lastSha === process.env.HEAD_SHA) {
+                shouldBuild = false;
+              }
+            } catch (error) {
+              if (error.status === 404) {
+                core.info('Nightly release does not exist yet, build will run.');
+              } else {
+                throw error;
+              }
+            }
+
+            core.setOutput('should_build', shouldBuild ? 'true' : 'false');
+
+      - name: Write summary
+        shell: bash
+        run: |
+          {
+            echo "## Nightly build decision"
+            echo
+            echo "- HEAD SHA: \`${{ steps.meta.outputs.head_sha }}\`"
+            echo "- Should build: \`${{ steps.release-check.outputs.should_build }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: check-changes
+    if: needs.check-changes.outputs.should_build == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            platform_id: linux-amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform_id: linux-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull build image
+        run: docker pull shupeixuan/zenoh-plugin-grpc-build:latest
+
+      - name: Clean previous dist
+        run: rm -rf "dist/${{ matrix.platform_id }}"
+
+      - name: Build inside container
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            -e CI=true \
+            -e BUILD_DATE="${{ needs.check-changes.outputs.build_date }}" \
+            -e BUILD_SEQ="${{ needs.check-changes.outputs.build_seq }}" \
+            shupeixuan/zenoh-plugin-grpc-build:latest \
+            bash -lc '
+              git config --global --add safe.directory /workspace
+              ./packaging/scripts/build-all.sh
+            '
+
+      - name: Verify artifacts
+        shell: bash
+        run: |
+          test -d "dist/${{ matrix.platform_id }}"
+          find "dist/${{ matrix.platform_id }}" -maxdepth 1 -type f | sort
+
+      - name: Upload nightly artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.platform_id }}
+          path: dist/${{ matrix.platform_id }}/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish nightly release
+    needs:
+      - check-changes
+      - build
+    if: needs.check-changes.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Show artifact list
+        shell: bash
+        run: find release-artifacts -type f | sort
+
+      - name: Remove existing nightly assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: 'nightly',
+              });
+
+              for (const asset of release.assets) {
+                core.info(`Deleting asset ${asset.name} (${asset.id})`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: asset.id,
+                });
+              }
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+      - name: Move nightly tag to current commit
+        uses: actions/github-script@v7
+        env:
+          HEAD_SHA: ${{ needs.check-changes.outputs.head_sha }}
+        with:
+          script: |
+            try {
+              await github.rest.git.updateRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: 'tags/nightly',
+                sha: process.env.HEAD_SHA,
+                force: true,
+              });
+              core.info(`Updated tag nightly to ${process.env.HEAD_SHA}`);
+            } catch (error) {
+              if (error.status === 404) {
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: 'refs/tags/nightly',
+                  sha: process.env.HEAD_SHA,
+                });
+                core.info(`Created tag nightly at ${process.env.HEAD_SHA}`);
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Publish nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          make_latest: false
+          target_commitish: ${{ needs.check-changes.outputs.head_sha }}
+          body: |
+            Automated nightly build for commit `${{ needs.check-changes.outputs.head_sha }}`.
+
+            Build date: `${{ needs.check-changes.outputs.build_date }}`
+            Build sequence: `${{ needs.check-changes.outputs.build_seq }}`
+
+            <!-- nightly-source-sha: ${{ needs.check-changes.outputs.head_sha }} -->
+          files: |
+            release-artifacts/nightly-linux-amd64/*
+            release-artifacts/nightly-linux-arm64/*
+          overwrite_files: true
