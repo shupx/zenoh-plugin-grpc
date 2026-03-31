@@ -154,6 +154,55 @@ jobs:
         shell: bash
         run: find release-artifacts -type f | sort
 
+      - name: Select release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          src_root="release-artifacts"
+          out_root="release-upload"
+          rm -rf "${out_root}"
+          mkdir -p "${out_root}"
+
+          declare -A counts
+          declare -A preferred
+          declare -a files
+
+          while IFS= read -r file; do
+            files+=("${file}")
+            base=$(basename "${file}")
+            parent=$(basename "$(dirname "${file}")")
+            counts["${base}"]=$(( ${counts["${base}"]:-0} + 1 ))
+
+            if [[ "${parent}" == "nightly-linux-amd64" ]]; then
+              preferred["${base}"]="${file}"
+            elif [[ -z "${preferred["${base}"]:-}" ]]; then
+              preferred["${base}"]="${file}"
+            fi
+          done < <(find "${src_root}" -type f | sort)
+
+          for file in "${files[@]}"; do
+            base=$(basename "${file}")
+            parent=$(basename "$(dirname "${file}")")
+            platform=${parent#nightly-}
+            target_name="${base}"
+
+            if [[ "${base}" == "manifest.json" || "${base}" == "BUILD_INFO.txt" ]]; then
+              if [[ "${base}" == *.json ]]; then
+                target_name="${base%.json}-${platform}.json"
+              else
+                target_name="${base%.txt}-${platform}.txt"
+              fi
+            elif [[ ${counts["${base}"]} -gt 1 && "${preferred["${base}"]}" != "${file}" ]]; then
+              echo "Skipping duplicate asset ${base} from ${file}"
+              continue
+            fi
+
+            cp "${file}" "${out_root}/${target_name}"
+          done
+
+          find "${out_root}" -type f | sort
+
       - name: Remove existing nightly assets
         uses: actions/github-script@v7
         with:
@@ -195,6 +244,5 @@ jobs:
 
             <!-- nightly-source-sha: ${{ needs.check-changes.outputs.head_sha }} -->
           files: |
-            release-artifacts/nightly-linux-amd64/*
-            release-artifacts/nightly-linux-arm64/*
+            release-upload/*
           overwrite_files: true
