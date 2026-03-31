@@ -1,0 +1,92 @@
+name: Nightly Release
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      BUILD_SEQ: ${{ github.run_number }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute build date
+        run: echo "BUILD_DATE=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+
+      - name: Pull build image
+        run: docker pull shupeixuan/zenoh-plugin-grpc-build:latest
+
+      - name: Build artifacts
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          PLATFORM="linux-${ARCH}"
+          docker run --rm \
+            --platform "linux/${ARCH}" \
+            -e CI=true \
+            -e BUILD_SEQ="${BUILD_SEQ}" \
+            -e BUILD_DATE="${BUILD_DATE}" \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            shupeixuan/zenoh-plugin-grpc-build:latest \
+            bash -lc "packaging/scripts/build-all.sh --out-dir /workspace/dist/${PLATFORM}"
+
+      - name: Archive dist artifacts
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          PLATFORM="linux-${ARCH}"
+          tar -C dist -czf "dist-${ARCH}.tar.gz" "${PLATFORM}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build outputs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: release
+
+      - name: Publish nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: nightly
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+          overwrite: true
+          fail_on_unmatched_files: true
+          files: |
+            release/dist-amd64.tar.gz
+            release/dist-arm64.tar.gz
