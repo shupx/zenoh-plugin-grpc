@@ -1,0 +1,13 @@
+.git
+.github
+.vscode
+
+target
+dist
+packaging/.work
+
+**/*.deb
+**/*.whl
+**/*.tar.gz
+
+Dockerfile.*
