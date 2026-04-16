@@ -4,9 +4,16 @@ on:
   schedule:
     - cron: '0 18 * * *'
   workflow_dispatch:
+    inputs:
+      upload_pypi:
+        description: Upload built Python distributions to PyPI
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: nightly-build
@@ -21,6 +28,7 @@ jobs:
       build_date: ${{ steps.meta.outputs.build_date }}
       build_seq: ${{ steps.meta.outputs.build_seq }}
       head_sha: ${{ steps.meta.outputs.head_sha }}
+      upload_pypi: ${{ steps.meta.outputs.upload_pypi }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,10 +38,13 @@ jobs:
       - name: Compute build metadata
         id: meta
         shell: bash
+        env:
+          UPLOAD_PYPI: ${{ github.event_name != 'workflow_dispatch' || inputs.upload_pypi }}
         run: |
           echo "build_date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
           echo "build_seq=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "upload_pypi=${UPLOAD_PYPI}" >> "$GITHUB_OUTPUT"
 
       - name: Compare against latest successful nightly run
         id: release-check
@@ -80,6 +91,7 @@ jobs:
             echo "## Nightly build decision"
             echo
             echo "- HEAD SHA: \`${{ steps.meta.outputs.head_sha }}\`"
+            echo "- Upload PyPI: \`${{ steps.meta.outputs.upload_pypi }}\`"
             echo "- Should build: \`${{ steps.release-check.outputs.should_build }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -273,8 +285,70 @@ jobs:
 
             Build date: `${{ needs.check-changes.outputs.build_date }}`
             Build sequence: `${{ needs.check-changes.outputs.build_seq }}`
+            Upload PyPI: `${{ needs.check-changes.outputs.upload_pypi }}`
 
             <!-- nightly-source-sha: ${{ needs.check-changes.outputs.head_sha }} -->
           files: |
             release-upload/*
           overwrite_files: true
+
+  publish-pypi:
+    name: Publish nightly package to PyPI
+    needs:
+      - check-changes
+      - build
+    if: needs.check-changes.outputs.should_build == 'true' && needs.check-changes.outputs.upload_pypi == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+    steps:
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare Python distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          src_root="release-artifacts"
+          out_root="pypi-dist"
+          rm -rf "${out_root}"
+          mkdir -p "${out_root}"
+
+          declare -A seen_sdist
+          declare -a wheels
+          declare -a sdists
+
+          while IFS= read -r file; do
+            case "${file}" in
+              *.whl) wheels+=("${file}") ;;
+              *.tar.gz) sdists+=("${file}") ;;
+            esac
+          done < <(find "${src_root}" -type f | sort)
+
+          test "${#wheels[@]}" -gt 0
+          test "${#sdists[@]}" -gt 0
+
+          for file in "${wheels[@]}"; do
+            cp "${file}" "${out_root}/"
+          done
+
+          for file in "${sdists[@]}"; do
+            base=$(basename "${file}")
+            if [[ -n "${seen_sdist["${base}"]:-}" ]]; then
+              echo "Skipping duplicate sdist ${base} from ${file}"
+              continue
+            fi
+
+            seen_sdist["${base}"]=1
+            cp "${file}" "${out_root}/${base}"
+          done
+
+          find "${out_root}" -maxdepth 1 -type f | sort
+
+      - name: Publish to PyPI with trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: pypi-dist
