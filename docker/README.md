@@ -22,7 +22,7 @@ docker buildx build \
 
 ```bash
 # create container
-docker run -dit --name zenoh_grpc_build shupeixuan/zenoh-plugin-grpc-build tail -f /dev/null
+docker run -dit --name zenoh_grpc_build -v /home/${USER}:/home/${USER} shupeixuan/zenoh-plugin-grpc-build tail -f /dev/null
 # enter container
 docker exec -it zenoh_grpc_build /bin/bash
 ```
