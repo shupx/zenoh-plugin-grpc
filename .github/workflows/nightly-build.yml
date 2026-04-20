@@ -277,7 +277,7 @@ jobs:
         with:
           tag_name: nightly
           name: Nightly Build
-          prerelease: true
+          prerelease: false
           make_latest: false
           target_commitish: ${{ needs.check-changes.outputs.head_sha }}
           body: |
