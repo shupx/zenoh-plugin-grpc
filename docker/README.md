@@ -18,6 +18,15 @@ docker buildx build \
   .
 ```
 
+## Run
+
+```bash
+# create container
+docker run -dit --name zenoh_grpc_build shupeixuan/zenoh-plugin-grpc-build tail -f /dev/null
+# enter container
+docker exec -it zenoh_grpc_build /bin/bash
+```
+
 ## Use in CI
 
 The image pre-installs:
