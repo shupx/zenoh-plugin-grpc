@@ -18,13 +18,25 @@ Both jobs build the Ubuntu 20.04 image defined by the Dockerfile and push their
 images by digest. Once both succeed, the publish job combines them into one
 multi-architecture version tag. No QEMU emulation is used.
 
-Configure these repository secrets under **Settings > Secrets and variables >
-Actions**:
+Use **Repository secrets** for the current workflow. In the GitHub repository,
+open **Settings > Secrets and variables > Actions > Secrets**, then click
+**New repository secret** for each of the following names:
 
 - `DOCKERHUB_USERNAME`: the Docker Hub account with push access to
   `shupeixuan/zenoh-plugin-grpc-build`.
 - `DOCKERHUB_TOKEN`: a Docker Hub access token with write permission for that
   repository.
+
+These values must be secrets, not entries in the **Variables** tab. The workflow
+reads them through `secrets.DOCKERHUB_USERNAME` and `secrets.DOCKERHUB_TOKEN` in
+both the `build` and `publish` jobs.
+
+**Environment secrets** under **Settings > Environments** are not used by the
+current workflow because its jobs do not declare an `environment`. If you
+choose Environment secrets instead, create an environment (for example,
+`dockerhub`), add both secrets there, and add `environment: dockerhub` at the
+job level to both `build` and `publish` in `docker-build.yml`. That environment's
+approval and branch restrictions will then apply to both jobs.
 
 Commit the workflow to the default branch. In **Actions > Build Docker image >
 Run workflow**, select the branch to build and start the workflow. The image tag
@@ -73,7 +85,8 @@ docker exec -it zenoh_grpc_build /bin/bash
 The image pre-installs:
 
 - Ubuntu 20.04
-- Rust 1.97.1 from `rustup`
+- Rust 1.97.1 from `rustup`, using the official Rust download servers and the
+  `minimal` profile (rustc, cargo, and rust-std; no Clippy or rustfmt downloads)
 - `python3`, `pip`, `maturin`
 - `git`
 - `protobuf-compiler`

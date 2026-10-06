@@ -3,8 +3,8 @@ FROM ubuntu:20.04
 USER root
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    RUSTUP_DIST_SERVER=https://mirrors.ustc.edu.cn/rust-static \
-    RUSTUP_UPDATE_ROOT=https://mirrors.ustc.edu.cn/rust-static/rustup \
+    RUSTUP_DIST_SERVER=https://static.rust-lang.org \
+    RUSTUP_UPDATE_ROOT=https://static.rust-lang.org/rustup \
     PYO3_PYTHON=/usr/bin/python3 \
     PATH=/root/.cargo/bin:${PATH}
 
@@ -22,12 +22,15 @@ RUN apt-get update \
         python3 \
         python3-dev \
         python3-pip \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1 --profile default \
-    && rustc --version \
-    && cargo --version \
     && python3 -m pip install --no-cache-dir maturin \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 --retry 5 --connect-timeout 30 \
+        -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --default-toolchain 1.97.1 --profile minimal \
+    && rustc --version \
+    && cargo --version
 
 # # 配置 Git 代理以加速依赖下载
 # RUN git config --global url."https://gh-proxy.org/https://github.com/".insteadOf "https://github.com/" && git config --global fetch.depth 1
