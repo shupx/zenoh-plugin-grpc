@@ -78,3 +78,10 @@ If you want to run inside `zenohd`, see:
 ## gRPC Client SDK
 
 - [zenoh-grpc-client-sdk/README.md](zenoh-grpc-client-sdk/README.md)
+
+
+## Contributing
+
+This project is maintained by Peixuan Shu from China and is open to contributions. Open an issue or submit a pull request if you have any questions or suggestions.
+
+Email: shupeixuan@qq.com
