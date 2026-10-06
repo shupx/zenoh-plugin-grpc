@@ -22,7 +22,7 @@ RUN apt-get update \
         python3 \
         python3-dev \
         python3-pip \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 --profile default \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1 --profile default \
     && rustc --version \
     && cargo --version \
     && python3 -m pip install --no-cache-dir maturin \

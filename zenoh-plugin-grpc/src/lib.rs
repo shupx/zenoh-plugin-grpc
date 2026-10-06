@@ -1055,7 +1055,8 @@ mod tests {
     };
     use zenoh_grpc_client_rs::{
         ConnectAddr, DeclarePublisherArgs, DeclareQuerierArgs, DeclareQueryableArgs,
-        DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, SessionGetArgs,
+        DeclareSubscriberArgs, GrpcSession, PublisherPutArgs, QuerierGetArgs, SessionDeleteArgs,
+        SessionGetArgs, SessionPutArgs,
     };
     use zenoh_grpc_proto::v1::{
         publisher_service_client::PublisherServiceClient,
@@ -1064,6 +1065,7 @@ mod tests {
 
     struct TestHarness {
         addr: String,
+        uds_path: Option<String>,
         stop: Arc<Notify>,
         _runtime: Runtime,
         _task: JoinHandle<()>,
@@ -1072,6 +1074,9 @@ mod tests {
     impl Drop for TestHarness {
         fn drop(&mut self) {
             self.stop.notify_waiters();
+            if let Some(path) = &self.uds_path {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 
@@ -1090,15 +1095,20 @@ mod tests {
     async fn start_harness_with_config(mut config: Config) -> TestHarness {
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
-        let mut runtime = RuntimeBuilder::new(ZenohConfig::default())
-            .build()
-            .await
+        let mut zenoh_config = ZenohConfig::default();
+        zenoh_config
+            .insert_json5("scouting/multicast/enabled", "false")
             .unwrap();
+        let mut runtime = RuntimeBuilder::new(zenoh_config).build().await.unwrap();
         runtime.start().await.unwrap();
         let stop = Arc::new(Notify::new());
         config.host = "127.0.0.1".into();
         config.port = port;
-        config.uds_path = None;
+        let uds_path = config
+            .uds_path
+            .as_ref()
+            .map(|_| format!("/tmp/zenoh-grpc-test-{}.sock", uuid::Uuid::new_v4()));
+        config.uds_path = uds_path.clone();
         let dynamic_runtime: DynamicRuntime = runtime.clone().into();
         let task = spawn_runtime(run(dynamic_runtime, config, stop.clone()));
 
@@ -1125,10 +1135,175 @@ mod tests {
 
         TestHarness {
             addr,
+            uds_path,
             stop,
             _runtime: runtime,
             _task: task,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_session_and_grpc_interoperate_over_uds() {
+        let harness = start_harness().await;
+        let path = harness.uds_path.as_ref().unwrap();
+        for _ in 0..40 {
+            if std::path::Path::new(path).exists() {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        let client = GrpcSession::connect(ConnectAddr::Unix(path.into()))
+            .await
+            .unwrap();
+        let native = zenoh::session::init(harness._runtime.clone().into())
+            .await
+            .unwrap();
+        assert_eq!(client.info().await.unwrap().zid, native.zid().to_string());
+        let native_sub = native.declare_subscriber("compat/native/**").await.unwrap();
+        client
+            .put(SessionPutArgs {
+                key_expr: "compat/native/value".into(),
+                payload: b"grpc-to-native".to_vec(),
+                encoding: "text/plain".into(),
+                attachment: b"metadata".to_vec(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let sample = timeout(Duration::from_secs(5), native_sub.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(sample.payload().to_bytes().as_ref(), b"grpc-to-native");
+        assert_eq!(sample.encoding().to_string(), "text/plain");
+        assert_eq!(
+            sample.attachment().unwrap().to_bytes().as_ref(),
+            b"metadata"
+        );
+        client
+            .delete(SessionDeleteArgs {
+                key_expr: "compat/native/value".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let sample = timeout(Duration::from_secs(5), native_sub.recv_async())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(sample.kind(), SampleKind::Delete);
+
+        let grpc_sub = client
+            .declare_subscriber(
+                DeclareSubscriberArgs {
+                    key_expr: "compat/grpc/**".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        native
+            .put("compat/grpc/value", b"native-to-grpc".as_slice())
+            .encoding("text/plain")
+            .attachment(b"native-metadata".as_slice())
+            .await
+            .unwrap();
+        let sample = timeout(
+            Duration::from_secs(5),
+            grpc_sub.receiver().unwrap().recv_async(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .sample
+        .unwrap();
+        assert_eq!(sample.payload, b"native-to-grpc");
+        assert_eq!(sample.attachment, b"native-metadata");
+        assert_eq!(sample.encoding, "text/plain");
+        native.delete("compat/grpc/value").await.unwrap();
+        let sample = timeout(
+            Duration::from_secs(5),
+            grpc_sub.receiver().unwrap().recv_async(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .sample
+        .unwrap();
+        assert_eq!(sample.kind, pb::SampleKind::Delete as i32);
+        grpc_sub.undeclare().await.unwrap();
+        native_sub.undeclare().await.unwrap();
+        native.close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_queries_receive_grpc_error_and_delete_replies() {
+        let harness = start_harness().await;
+        let client = GrpcSession::connect(ConnectAddr::Tcp(harness.addr.clone()))
+            .await
+            .unwrap();
+        let native = zenoh::session::init(harness._runtime.clone().into())
+            .await
+            .unwrap();
+        let queryable = client
+            .declare_queryable(
+                DeclareQueryableArgs {
+                    key_expr: "compat/query/**".into(),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        for delete_reply in [false, true] {
+            let replies = native
+                .get("compat/query/value?test=true")
+                .consolidation(ConsolidationMode::None)
+                .payload(b"request".as_slice())
+                .encoding("text/plain")
+                .attachment(b"request-metadata".as_slice())
+                .await
+                .unwrap();
+            let query = timeout(Duration::from_secs(5), queryable.recv_async())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(query.parameters(), "test=true");
+            assert_eq!(query.payload(), b"request");
+            assert_eq!(query.attachment(), b"request-metadata");
+            if delete_reply {
+                query
+                    .reply_delete("compat/query/value", b"deleted".to_vec(), "")
+                    .await
+                    .unwrap();
+            } else {
+                query
+                    .reply_err(b"error".to_vec(), "text/plain")
+                    .await
+                    .unwrap();
+            }
+            query.finish().await.unwrap();
+            let reply = timeout(Duration::from_secs(5), replies.recv_async())
+                .await
+                .unwrap()
+                .unwrap();
+            if delete_reply {
+                let sample = reply.result().unwrap();
+                assert_eq!(sample.kind(), SampleKind::Delete);
+                assert_eq!(sample.attachment().unwrap().to_bytes().as_ref(), b"deleted");
+            } else {
+                let error = reply.result().unwrap_err();
+                assert_eq!(error.payload().to_bytes().as_ref(), b"error");
+                assert_eq!(error.encoding().to_string(), "text/plain");
+            }
+            assert!(timeout(Duration::from_secs(5), replies.recv_async())
+                .await
+                .unwrap()
+                .is_err());
+        }
+        queryable.undeclare().await.unwrap();
+        native.close().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1206,13 +1381,10 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let query = timeout(
-                    Duration::from_secs(5),
-                    queryable.recv_async(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let query = timeout(Duration::from_secs(5), queryable.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
                 query
                     .reply(
                         "demo/query/value",
@@ -1280,13 +1452,10 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let query = timeout(
-                    Duration::from_secs(5),
-                    queryable.recv_async(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let query = timeout(Duration::from_secs(5), queryable.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
                 query
                     .reply(
                         "demo/querier/value",
@@ -1348,13 +1517,10 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let query = timeout(
-                    Duration::from_secs(5),
-                    queryable.recv_async(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let query = timeout(Duration::from_secs(5), queryable.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
                 query.finish().await.unwrap();
                 queryable.undeclare().await.unwrap();
             })
@@ -1400,13 +1566,10 @@ mod tests {
         let queryable_task = {
             let queryable = queryable;
             tokio::spawn(async move {
-                let _query = timeout(
-                    Duration::from_secs(5),
-                    queryable.recv_async(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let _query = timeout(Duration::from_secs(5), queryable.recv_async())
+                    .await
+                    .unwrap()
+                    .unwrap();
                 sleep(Duration::from_millis(100)).await;
                 queryable.undeclare().await.unwrap();
             })

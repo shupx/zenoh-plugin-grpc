@@ -1,6 +1,6 @@
 # zenoh-plugin-grpc
 
-Zenoh `1.7.2` gRPC plugin.
+Zenoh `1.10.1` gRPC plugin.
 
 ## Build
 

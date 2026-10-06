@@ -181,7 +181,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Pull build image
-        run: docker pull shupeixuan/zenoh-plugin-grpc-build:latest
+        run: docker pull shupeixuan/zenoh-plugin-grpc-build:zenoh-1.10.1-rust-1.97.1
 
       - name: Clean previous dist
         run: rm -rf "dist/${{ matrix.platform_id }}"
@@ -195,9 +195,10 @@ jobs:
             -e CI=true \
             -e BUILD_DATE="${{ needs.check-changes.outputs.build_date }}" \
             -e BUILD_SEQ="${{ needs.check-changes.outputs.build_seq }}" \
-            shupeixuan/zenoh-plugin-grpc-build:latest \
+            shupeixuan/zenoh-plugin-grpc-build:zenoh-1.10.1-rust-1.97.1 \
             bash -lc '
               git config --global --add safe.directory /workspace
+              cargo test --workspace --all-targets --locked
               ./packaging/scripts/build-all.sh
             '
 

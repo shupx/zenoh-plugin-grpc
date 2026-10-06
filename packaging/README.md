@@ -32,21 +32,21 @@ The packaging scripts derive versions from the workspace version plus git state.
 Canonical logical version:
 
 ```text
-1.7.2-dev-20260330.1-g2ca8632
-1.7.2-dev-20260330.1-g2ca8632-modified
+1.10.1-dev-20260330.1-g2ca8632
+1.10.1-dev-20260330.1-g2ca8632-modified
 ```
 
 Debian version:
 
 ```text
-1.7.2~dev20260330.1+g2ca8632-1
-1.7.2~dev20260330.1+g2ca8632.modified-1
+1.10.1~dev20260330.1+g2ca8632-1
+1.10.1~dev20260330.1+g2ca8632.modified-1
 ```
 
 Python public version:
 
 ```text
-1.7.2.dev2026033001
+1.10.1.dev2026033001
 ```
 
 The Python version intentionally omits the git hash and dirty suffix so it remains a valid public PyPI version under PEP 440.

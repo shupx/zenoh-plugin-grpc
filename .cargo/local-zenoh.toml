@@ -1,0 +1,8 @@
+# Opt in with: cargo --config .cargo/local-zenoh.toml test --workspace --all-targets
+# The Zenoh 1.10.1 source checkout must be a sibling named `zenoh`.
+[patch.crates-io]
+zenoh = { path = "../zenoh/zenoh" }
+zenoh-ext = { path = "../zenoh/zenoh-ext" }
+zenoh-plugin-trait = { path = "../zenoh/plugins/zenoh-plugin-trait" }
+zenoh-result = { path = "../zenoh/commons/zenoh-result" }
+zenoh-util = { path = "../zenoh/commons/zenoh-util" }
